@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Zako~Zako~</title>
+    <meta charset="utf-8">
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script>
+        var Module = { TOTAL_MEMORY: 256 * 1024 * 1024 }; // 256MB
+    </script>
+    <link rel="stylesheet" href="splashscreen/splash_screen.css">
+    <script src="splashscreen/splashscreen.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: transparent; }
+        canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
+        canvas.draggable { cursor: grab; }
+        canvas.dragging { cursor: grabbing; }
+        #bg-div { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; background-size: cover; background-position: center; }
+    </style>
+</head>
+<body>
+    <div id="splash-screen">
+        <div class="splash-content">
+            <h1 class="splash-title">EmoteWidget <span id="splash-version"></span></h1>
+            <div class="progress-container">
+                <div class="progress-label" id="main-progress-label">初始化...</div>
+                <div class="progress-bar-background">
+                    <div class="progress-bar-fill" id="main-progress-bar"></div>
+                </div>
+            </div>
+            <div class="progress-container">
+                <div class="progress-label" id="plugin-progress-label">等待插件...</div>
+                <div class="progress-bar-background">
+                    <div class="progress-bar-fill" id="plugin-progress-bar"></div>
+                </div>
+            </div>
+            <div id="error-console">
+                <div class="error-header">加载日志:</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="bg-div"></div>
+    <canvas id="emote-canvas"></canvas>
+    <div id="dialog-root"></div>
+    
+    <script src="driver/emoteplayer.js"></script>
+    <script src="driver/FreeMoteDriver.js"></script>
+
+    <script>
+    // ==========================================================
+    // ==  1. 全局变量与核心配置
+    // ==========================================================
+    let emotePlayer = null;
+    let py_api = null;
+    
+    const RENDER_WIDTH = 1024;
+    const RENDER_HEIGHT = 1024 * (16/9); 
+
+    let isDragEnabled = false, isZoomEnabled = false, isGazeControlEnabled = false, isDragging = false, isConsideredDrag = false;
+    let dragStartX, dragStartY;
+    const DRAG_THRESHOLD = 5;
+    let hoverTimeoutId = null;
+    const HOVER_DELAY = 1000;
+    let currentDialogTheme = null, dialogContainer = null, dialogText = null, hideDialogTimeout = null, typewritingTimeout = null, debounceTimeout = null, currentDialogText = "";
+
+    // ==========================================================
+    // ==  2. 全局 JS 错误处理器
+    // ==========================================================
+    function handleJsError(error, context = 'General') {
+        console.error(`[JS Error in ${context}]`, error);
+        if (py_api && py_api.on_js_error) {
+            const message = error.message || 'Unknown error occurred.';
+            const stack = error.stack || 'No stack trace available.';
+            py_api.on_js_error(message, stack);
+        }
+    }
+    window.addEventListener('unhandledrejection', event => {
+        handleJsError(event.reason, 'Unhandled Promise');
+    });
+
+    // ==========================================================
+    // ==  3. 初始化流程 
+    // ==========================================================
+       window.addEventListener('DOMContentLoaded', () => {
+        new QWebChannel(qt.webChannelTransport, function (channel) {
+            py_api = channel.objects.py_api;
+        });
+        setupEventListeners();
+        loadDialogTheme('default'); 
+    });
+
+    // ==========================================================
+    // ==  4. 公共 API (由 Python 调用)
+    // ==========================================================
+    
+    async function loadNewModel(modelFilename) {
+        console.log(`JS: 接到指令，开始加载模型 '${modelFilename}'`);
+        try {
+            const canvas = document.getElementById('emote-canvas');
+            
+            // 如果已有旧模型，确保取消之前的事件订阅，防止内存泄漏
+            if (emotePlayer) {
+                emotePlayer.off('transformchange', debouncedUpdateDialogPosition);
+            }
+
+            if (!emotePlayer) {
+                console.log(`JS: 首次加载，正在创建 EmotePlayer 实例...`);
+                canvas.width = RENDER_WIDTH;
+                canvas.height = RENDER_HEIGHT;
+                EmotePlayer.createRenderCanvas(RENDER_WIDTH, RENDER_HEIGHT);
+                emotePlayer = new EmotePlayer(canvas);
+            }
+
+            const modelUrl = `models/${modelFilename}`;
+            await emotePlayer.promiseLoadDataFromURL(modelUrl);
+            emotePlayer.on('transformchange', debouncedUpdateDialogPosition);
+            
+            console.log("JS: 模型数据加载成功!");
+            const timelines = emotePlayer.mainTimelineLabels || [];
+            if (py_api) py_api.on_player_ready(timelines);
+        } catch (err) {
+            handleJsError(err, `loadNewModel('${modelFilename}')`);
+            emotePlayer = null;
+        }
+    }
+    
+    function setBackgroundColor(r, g, b, a) {
+        try {
+            document.body.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${a})`;
+        } catch (err) {
+            handleJsError(err, 'setBackgroundColor');
+        }
+    }
+
+    function setBackgroundImage(imageUrl) {
+        try {
+            const bgDiv = document.getElementById('bg-div');
+            bgDiv.style.backgroundImage = imageUrl ? `url('${imageUrl}')` : 'none';
+        } catch (err) {
+            handleJsError(err, 'setBackgroundImage');
+        }
+    }
+
+    function autoCenterPlayer(duration) {
+        try {
+            if (!emotePlayer || !emotePlayer.isCharaProfileAvailable) return;
+            const canvas = document.getElementById('emote-canvas');
+            const bounds = emotePlayer.charaBounds;
+            if (!bounds || bounds.right === bounds.left) return;
+
+            const modelWidth = bounds.right - bounds.left;
+            const modelHeight = bounds.bottom - bounds.top;
+            if (modelWidth <= 0 || modelHeight <= 0) return;
+
+            const scaleX = canvas.clientWidth / modelWidth;
+            const scaleY = canvas.clientHeight / modelHeight;
+            const scale = Math.min(scaleX, scaleY) * 0.95;
+
+            const centerX = (bounds.left + bounds.right) / 2;
+            const centerY = (bounds.top + bounds.bottom) / 2;
+
+            emotePlayer.setScale(scale, duration);
+            emotePlayer.setCoord(-centerX * scale, -centerY * scale, duration);
+        } catch (err) {
+            handleJsError(err, 'autoCenterPlayer');
+        }
+    }
+
+    function enableGazeControl(enable, paramsFromPython) {
+        try {
+            const canvas = document.getElementById('emote-canvas');
+            if (enable) {
+                window.gazeVariableMap = paramsFromPython;
+                canvas.addEventListener('mousemove', onGazeMouseMove);
+                isGazeControlEnabled = true;
+            } else {
+                canvas.removeEventListener('mousemove', onGazeMouseMove);
+                if (window.gazeVariableMap && emotePlayer) {
+                    const map = window.gazeVariableMap;
+                    Object.values(map).forEach(paramInfo => {
+                        if (paramInfo && paramInfo.name && paramInfo.range) {
+                            const middleValue = (paramInfo.range[0] + paramInfo.range[1]) / 2.0;
+                            emotePlayer.setVariable(paramInfo.name, middleValue, 300);
+                        }
+                    });
+                }
+                isGazeControlEnabled = false;
+            }
+        } catch (err) {
+            handleJsError(err, 'enableGazeControl');
+        }
+    }
+    
+    function enablePlayerDrag(enable) {
+        isDragEnabled = enable;
+        const canvas = document.getElementById('emote-canvas');
+        canvas.classList.toggle('draggable', enable);
+    }
+    
+    function enablePlayerZoom(enable) {
+        isZoomEnabled = enable;
+    }
+
+    // ==========================================================
+    // ==  5. !! 全新封装的对话框系统 (遵照您的指示) !!
+    // ==========================================================
+
+    function debouncedUpdateDialogPosition() {
+        const DEBOUNCE_DELAY = 150; // ms, 用户停止移动后等待150毫秒再更新
+        
+        // 清除上一个计时器
+        clearTimeout(debounceTimeout);
+        
+        // 设置一个新的计时器
+        debounceTimeout = setTimeout(() => {
+            updateDialogPosition();
+        }, DEBOUNCE_DELAY);
+    }
+
+    // --- 模块 A: 主题加载器 ---
+    async function loadDialogTheme(themeName) {
+        if (window.currentLoadedTheme === themeName) return;
+
+        console.log(`[THEME] Loading theme: ${themeName}`);
+        const url = `dialogs/${themeName}.html`;
+        const dialogRoot = document.getElementById('dialog-root');
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Theme file not found: ${response.statusText}`);
+            
+            const themeContent = await response.text();
+            
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = themeContent;
+
+            const styleElement = tempDiv.querySelector('#dialog-theme-style');
+            const htmlElement = tempDiv.querySelector('#dialog-theme-html'); // 获取wrapper
+
+            if (!styleElement || !htmlElement) {
+                throw new Error(`Theme file '${themeName}.html' is missing required IDs.`);
+            }
+
+            // --- 样式注入 (无改动) ---
+            const oldStyle = document.getElementById('dynamic-dialog-style');
+            if (oldStyle) oldStyle.remove();
+            styleElement.id = 'dynamic-dialog-style';
+            document.head.appendChild(styleElement);
+            console.log(`[THEME] Style injected into <head>.`);
+
+            // --- !! 关键修正：使用 innerHTML 解开一层 wrapper !! ---
+            dialogRoot.innerHTML = htmlElement.innerHTML;
+            // --- 结束修正 ---
+
+            console.log(`[THEME] HTML structure unwrapped and injected into #dialog-root.`);
+            
+            window.currentLoadedTheme = themeName;
+
+        } catch (err) {
+            handleJsError(err, `loadDialogTheme('${themeName}')`);
+        }
+    }
+
+    // --- !! 新增 模块 A.1: DOM 引用获取器 !! ---
+    function ensureDialogElements() {
+        // 1. 首先获取我们明确的作用域容器
+        const dialogRoot = document.getElementById('dialog-root');
+
+        // 如果连根容器都找不到，这是一个严重的初始化问题
+        if (!dialogRoot) {
+            console.error("[CRITICAL] Dialog root element '#dialog-root' not found in the DOM.");
+            // 确保全局引用被清空
+            dialogContainer = dialogText = dialogBox = null;
+            return false;
+        }
+
+        // 2. 在这个根容器的 *内部* 进行查找，避免全局污染
+        dialogContainer = dialogRoot.querySelector(".dialog-container");
+        dialogText = dialogRoot.querySelector("#dialog-text");
+        dialogBox = dialogRoot.querySelector(".dialog-box");
+        
+        const success = dialogContainer && dialogText && dialogBox;
+        if (!success) {
+            console.error(
+                "[CRITICAL] Dialog element query failed within '#dialog-root'.\n" +
+                `  - .dialog-container found: ${!!dialogContainer}\n` +
+                `  - #dialog-text found: ${!!dialogText}\n` +
+                `  - .dialog-box found: ${!!dialogBox}\n` +
+                "  Please check the HTML structure of your theme file and the unwrapping logic in loadDialogTheme."
+            );
+        }
+        return success;
+    }
+
+    // --- 模块 B: 内容管理器 (打字机) ---
+    function typewriterEffect(element, text, speed_ms = 50) {
+    clearTimeout(typewritingTimeout);
+    if (!element || !text) return;
+
+    element.innerHTML = ''; // 清空旧内容
+    const dialogBox = element.closest(".dialog-box");
+    if (!dialogBox) return;
+
+    // 先收缩对话框
+    dialogBox.style.opacity = '0';
+    dialogBox.style.maxHeight = '0px';
+    dialogBox.style.paddingTop = '0';
+    dialogBox.style.paddingBottom = '0';
+
+    const lines = text.split('\n');
+    let currentLineIndex = 0;
+    let currentLineCharIndex = 0;
+    let currentLineElement = null;
+    let lineSpans = [];
+
+    // 展开对话框（外框渐显）
+    requestAnimationFrame(() => {
+        dialogBox.style.opacity = '1';
+        dialogBox.style.paddingTop = '15px';
+        dialogBox.style.paddingBottom = '15px';
+    });
+
+    function revealNextChar() {
+        if (currentLineIndex >= lines.length) {
+            // 全部完成，确保最终高度准确
+            requestAnimationFrame(() => {
+                dialogBox.style.maxHeight = dialogBox.scrollHeight + 'px';
+            });
+            return;
+        }
+
+        // 新的一行
+        if (!currentLineElement) {
+            currentLineElement = document.createElement('div');
+            currentLineElement.className = 'dialog-line';
+            element.appendChild(currentLineElement);
+            lineSpans = [];
+            currentLineCharIndex = 0;
+
+            // 动态撑高，确保新行出现时动画平滑
+            requestAnimationFrame(() => {
+                dialogBox.style.maxHeight = dialogBox.scrollHeight + 'px';
+            });
+        }
+
+        const currentLineText = lines[currentLineIndex];
+
+        if (currentLineCharIndex < currentLineText.length) {
+            const char = currentLineText[currentLineCharIndex];
+            const span = document.createElement('span');
+            span.className = 'char';
+            span.innerHTML = char === ' ' ? '&nbsp;' : char;
+            span.style.opacity = '0';
+            span.style.transform = 'translateY(-20px) rotateX(90deg)';
+            currentLineElement.appendChild(span);
+            lineSpans.push(span);
+
+            // 下一帧触发动画
+            requestAnimationFrame(() => {
+                span.style.opacity = '1';
+                span.style.transform = 'translateY(0) rotateX(0)';
+                dialogBox.style.maxHeight = dialogBox.scrollHeight + 'px';
+            });
+
+            currentLineCharIndex++;
+            typewritingTimeout = setTimeout(revealNextChar, speed_ms);
+
+        } else {
+            // 当前行完成，合并 span 为纯文本，提高性能
+            const lineFinalText = lineSpans.map(s => s.textContent).join('');
+            currentLineElement.innerHTML = lineFinalText;
+
+            currentLineIndex++;
+            currentLineElement = null;
+            lineSpans = [];
+
+            // 继续下一行
+            typewritingTimeout = setTimeout(revealNextChar, speed_ms);
+        }
+    }
+
+    revealNextChar();
+}
+    
+    // --- 模块 C: 位置/缩放管理器 ---
+    function updateDialogPosition() {
+        if (!ensureDialogElements() || !emotePlayer || !emotePlayer.isCharaProfileAvailable) return;
+
+        const state = {
+            scale: emotePlayer.scale,
+            coord: emotePlayer.coord,
+            bounds: emotePlayer.charaBounds
+        };
+
+        const pos = calculateDialogPosition(state, window.dialogYOffset || -80);
+        if (!pos) return;
+
+        // 直接把 left/top 当作锚点中心，transform 用 translate(-50%, -100%)
+        dialogContainer.style.left = `${pos.left}px`;
+        dialogContainer.style.top = `${pos.top}px`;
+        dialogContainer.style.transform = `translate(-50%, -100%) scale(${pos.scale})`;
+    }
+
+    // --- 模块 D: 状态管理器 ---
+    function showDialog() {
+        if (!ensureDialogElements()) return;
+
+        dialogContainer.classList.add("visible");
+        dialogContainer.style.opacity = '1';
+
+        if (dialogBox) {
+            // 先收缩，再展开
+            dialogBox.style.maxHeight = '0px';
+
+            // 下一帧展开
+            requestAnimationFrame(() => {
+                dialogBox.classList.add("open");
+            });
+        }
+    }
+
+    function hideDialog() {
+        if (!ensureDialogElements()) return;
+        if (dialogBox) {
+            dialogBox.classList.remove("open");
+        }
+
+        dialogContainer.style.opacity = '0';
+        dialogContainer.classList.remove("visible");
+        clearTimeout(hideDialogTimeout);
+        clearTimeout(typewritingTimeout);
+
+        if (dialogText) {
+            const onTransitionEnd = (e) => {
+                if (e.propertyName === "opacity") {
+                    dialogText.innerHTML = "";
+                    if (dialogBox) {
+                        dialogBox.style.maxHeight = '0px';
+                        dialogBox.style.paddingTop = '0px';
+                        dialogBox.style.paddingBottom = '0px';
+                        dialogBox.style.borderWidth = '0px';
+                        dialogBox.style.borderColor = 'transparent';
+                    }
+
+                    // 移除事件监听器，避免内存泄漏和重复执行
+                    dialogContainer.removeEventListener("transitionend", onTransitionEnd);
+                }
+            };
+            dialogContainer.addEventListener("transitionend", onTransitionEnd);
+        }
+    }
+
+
+    // --- 模块 E: 总指挥官 (Python入口) ---
+    async function showCharacterDialog(text, extra_read_time_ms = 3000, themeName, y_offset_px = -80) {
+        await loadDialogTheme(themeName);
+        if (!dialogContainer || !dialogText) return;
+
+        window.dialogYOffset = y_offset_px;
+
+        updateDialogPosition(); 
+        showDialog();
+        typewriterEffect(dialogText, text);
+        
+        // 4. 设置隐藏计时器
+        const typingDuration = text.length * 50;
+        const totalDuration = typingDuration + extra_read_time_ms + 500;
+        clearTimeout(hideDialogTimeout);
+        hideDialogTimeout = setTimeout(hideDialog, totalDuration);
+    }
+
+
+    // ==========================================================
+    // ==  6. 连接 Python 与新对话框系统的桥梁
+    // ==========================================================
+    
+    // !! 辅助计算函数 !!
+    function calculateDialogPosition(emotePlayerState, y_offset_px) {
+        if (!dialogContainer || !emotePlayerState) return null;
+
+        const { scale, coord, bounds } = emotePlayerState;
+        const canvas = document.getElementById('emote-canvas');
+        const viewportWidth = document.body.clientWidth;
+        const viewportHeight = document.body.clientHeight;
+        const safeMargin = 50;
+
+        // 模型顶部中心作为锚点
+        const anchorX_model = (bounds.left + bounds.right) / 2;
+        const anchorY_model = bounds.top;
+
+        // 转到世界坐标
+        const worldX = anchorX_model * scale + coord[0];
+        const worldY = anchorY_model * scale + coord[1];
+
+        // 映射到屏幕
+        const screenX = worldX + canvas.clientWidth / 2;
+        const screenY = worldY + canvas.clientHeight / 2 + y_offset_px;
+
+        // 边界限制
+        const finalX = Math.min(Math.max(screenX, safeMargin), viewportWidth - safeMargin);
+        const finalY = Math.min(Math.max(screenY, safeMargin), viewportHeight - safeMargin);
+
+        return { left: finalX, top: finalY, scale: 1 };
+    }
+
+
+    // ==========================================================
+    // ==  7. 内部事件处理器
+    // ==========================================================
+
+    function setupEventListeners() {
+        const canvas = document.getElementById('emote-canvas');
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('wheel', onWheel);
+        canvas.addEventListener('click', (event) => {
+            if (isConsideredDrag) return;
+            if (isOverCharacter(event.offsetX, event.offsetY)) {
+                if (py_api) py_api.js_on_character_click();
+            }
+        });
+        canvas.addEventListener('mousemove', (event) => {
+            clearTimeout(hoverTimeoutId);
+            if (isOverCharacter(event.offsetX, event.offsetY)) {
+                hoverTimeoutId = setTimeout(() => {
+                    if (py_api) py_api.js_on_character_hover();
+                }, HOVER_DELAY);
+            }
+        });
+        canvas.addEventListener('mouseleave', () => clearTimeout(hoverTimeoutId));
+    }
+    
+    function onMouseDown(event) {
+        if (!isDragEnabled || event.button !== 0) return;
+        isDragging = true;
+        isConsideredDrag = false;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.addEventListener('mouseleave', onMouseUp); // Also stop on leave
+        const canvas = document.getElementById('emote-canvas');
+        canvas.classList.add('dragging');
+    }
+
+    function onMouseMove(event) {
+        if (!isDragging) return;
+        const dx = event.clientX - dragStartX;
+        const dy = event.clientY - dragStartY;
+        if (!isConsideredDrag && Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
+            isConsideredDrag = true;
+        }
+        if (emotePlayer) {
+            const currentCoord = emotePlayer.coord;
+            emotePlayer.setCoord(currentCoord[0] + dx, currentCoord[1] + dy);
+        }
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+    }
+
+    function onMouseUp(event) {
+        if (!isDragging) return;
+        isDragging = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.removeEventListener('mouseleave', onMouseUp);
+        const canvas = document.getElementById('emote-canvas');
+        canvas.classList.remove('dragging');
+    }
+    
+    function onWheel(event) {
+        if (!isZoomEnabled) return;
+        event.preventDefault();
+        if (emotePlayer) {
+            const scaleDelta = event.deltaY > 0 ? 0.8 : 1.1;
+            emotePlayer.setScale(emotePlayer.scale * scaleDelta, 100);
+        }
+    }
+    
+    function onGazeMouseMove(event) {
+        try {
+            if (!isGazeControlEnabled || !emotePlayer || !window.gazeVariableMap) return;
+            const map = window.gazeVariableMap;
+            const rect = event.target.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width * 2 - 1;
+            const y = (event.clientY - rect.top) / rect.height * 2 - 1;
+            
+            Object.values(map).forEach(paramInfo => {
+                let targetValue;
+                if (paramInfo.special_usage.includes('HEAD_LR') || paramInfo.special_usage.includes('EYE_LR')) {
+                    targetValue = mapToRange(x, paramInfo.range);
+                } else if (paramInfo.special_usage.includes('HEAD_UD') || paramInfo.special_usage.includes('EYE_UD')) {
+                    targetValue = mapToRange(y, paramInfo.range);
+                }
+                if (targetValue !== undefined) {
+                    emotePlayer.setVariable(paramInfo.name, targetValue, 100);
+                }
+            });
+        } catch (err) {
+            handleJsError(err, 'onGazeMouseMove');
+        }
+    }
+
+    // ==========================================================
+    // ==  8. 辅助函数
+    // ==========================================================
+
+    function isOverCharacter(x, y) {
+        try {
+            if (!emotePlayer || !emotePlayer.initialized || !EmotePlayer.device) {
+                return false;
+            }
+            const canvas = document.getElementById('emote-canvas');
+            const textureX = Math.floor(x * (RENDER_WIDTH / canvas.clientWidth));
+            const textureY = Math.floor(y * (RENDER_HEIGHT / canvas.clientHeight));
+            
+            // !! 关键 !! 确保 EmotePlayer.device.readPixelAlpha 存在
+            if (typeof EmotePlayer.device.readPixelAlpha !== 'function') {
+                // 如果函数不存在，打印一次警告并返回 false，避免持续报错
+                console.warn("isOverCharacter requires 'readPixelAlpha' method in EmoteDevice class.");
+                EmotePlayer.device.readPixelAlpha = () => 0; // 临时禁用，防止刷屏
+                return false;
+            }
+
+            const alpha = EmotePlayer.device.readPixelAlpha(textureX, textureY);
+            return alpha > 10;
+        } catch(err) {
+            handleJsError(err, 'isOverCharacter');
+            return false;
+        }
+    }
+
+    function mapToRange(value, range) {
+        const [min, max] = range;
+        // 修正：应该使用 value [-1, 1] 来映射，而不是先转到 [0, 1]
+        const center = (max + min) / 2;
+        const amplitude = (max - min) / 2;
+        return center + value * amplitude;
+    }
+
+    </script>
+</body>
+</html>

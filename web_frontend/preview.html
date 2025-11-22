@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Splash Screen Preview</title>
+    
+    <!-- 1. 直接引入启动画面的样式 -->
+    <link rel="stylesheet" href="splashscreen/splash_screen.css">
+
+    <style>
+        /* 模拟 EmoteWidget 的容器样式 (保持不变) */
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #1a1a1a;
+        }
+        #widget-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            border: 2px solid #555;
+            overflow: hidden;
+            background: #FFFFFF;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10000;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            color: white;
+            font-family: sans-serif;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <button onclick="runSimulation()">Restart Simulation</button>
+    </div>
+
+    <!-- 模拟 EmoteWidget 的容器 -->
+    <div id="widget-container">
+        <!-- 2. 直接将 splash_screen.html 的内容粘贴在这里 -->
+        <div id="splash-screen">
+            <div class="splash-content">
+                <h1 class="splash-title">EmoteWidget <span id="splash-version"></span></h1>
+                <div class="progress-container">
+                    <div class="progress-label" id="main-progress-label">初始化...</div>
+                    <div class="progress-bar-background">
+                        <div class="progress-bar-fill" id="main-progress-bar"></div>
+                    </div>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-label" id="plugin-progress-label">等待插件...</div>
+                    <div class="progress-bar-background">
+                        <div class="progress-bar-fill" id="plugin-progress-bar"></div>
+                    </div>
+                </div>
+                <div id="error-console">
+                    <div class="error-header">加载日志:</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. 在 HTML 结构加载完毕后，引入脚本 -->
+    <script src="splashscreen/splashscreen.js"></script>
+    <script>
+        // 4. 定义并执行模拟流程
+        async function runSimulation() {
+            // 重置状态以便重新运行
+            const splash = document.getElementById('splash-screen');
+            if (!splash) {
+                 // 如果splash不存在，重新注入并初始化
+                document.getElementById('widget-container').innerHTML = `
+                <div id="splash-screen">
+                    <div class="splash-content">
+                        <h1 class="splash-title">EmoteWidget <span id="splash-version"></span></h1>
+                        <div class="progress-container"><div class="progress-label" id="main-progress-label">初始化...</div><div class="progress-bar-background"><div class="progress-bar-fill" id="main-progress-bar"></div></div></div>
+                        <div class="progress-container"><div class="progress-label" id="plugin-progress-label">等待插件...</div><div class="progress-bar-background"><div class="progress-bar-fill" id="plugin-progress-bar"></div></div></div>
+                        <div id="error-console"><div class="error-header">加载日志:</div></div>
+                    </div>
+                </div>`;
+            }
+            // 确保 DOM 元素可见
+            document.getElementById('splash-screen').classList.remove('fade-out');
+            document.getElementById('error-console').innerHTML = '<div class="error-header">加载日志:</div>';
+
+
+            // 模拟 EmoteWidget 的启动流程
+            SplashScreenAPI.setVersion("3.0.0-preview");
+            
+            SplashScreenAPI.updateMainProgress(0.1, "EmoteWidget 初始化...");
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            SplashScreenAPI.updateMainProgress(0.3, "正在加载前端页面与 WebView 内核...");
+            await new Promise(resolve => setTimeout(resolve, 800));
+
+            SplashScreenAPI.updateMainProgress(0.6, "WebView 内核已就绪，开始加载插件...");
+            
+            const fakePlugins = [
+                "plugins.tts.azure_tts",
+                "plugins.gpt.openai_chat",
+                "plugins.experimental.vtube_studio_bridge",
+                "plugins.utils.asset_loader",
+                "plugins.nonexistent.broken_plugin"
+            ];
+
+            for (let i = 0; i < fakePlugins.length; i++) {
+                const pluginName = fakePlugins[i];
+                const progress = (i + 1) / fakePlugins.length;
+
+                SplashScreenAPI.updatePluginProgress(progress, `正在加载: ${pluginName}...`);
+                await new Promise(resolve => setTimeout(resolve, 400 + Math.random() * 300));
+
+                if (pluginName.includes("broken")) {
+                    SplashScreenAPI.addLog(`✗ 插件 '${pluginName}' 加载失败: TypeError: Cannot read property 'initialize' of undefined`, true);
+                } else {
+                    SplashScreenAPI.addLog(`✓ 成功加载插件: ${pluginName.split('.').pop()}`);
+                }
+            }
+
+            SplashScreenAPI.updatePluginProgress(1.0, "完成");
+            SplashScreenAPI.updateMainProgress(0.9, "插件加载完毕，等待模型...");
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            SplashScreenAPI.updateMainProgress(1.0, "模型 'chara.psb' 已就绪！");
+            
+            setTimeout(() => SplashScreenAPI.dismiss(), 500);
+        }
+
+        // 页面加载后自动运行一次
+        document.addEventListener('DOMContentLoaded', runSimulation);
+    </script>
+</body>
+</html>
