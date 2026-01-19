@@ -2,7 +2,8 @@
 
 一个基于 PySide6 的、功能完备的动态角色显示组件，用于加载和控制 [FreeMote (E-mote)](https://github.com/UlyssesWu/FreeMote) (尤其是一些galgame中解包出来的) 模型。它提供了一套高级、纯粹的 Python API，将所有与底层 Web 引擎和 JavaScript 的复杂交互完全封装，让开发者可以轻松地将交互式 2D 角色集成到桌面应用中。
 
-![image](https://github.com/user-attachments/assets/c8fd531b-3327-4b5c-8317-9de2432823a9)
+<img width="1924" height="1397" alt="image" src="https://github.com/user-attachments/assets/167df9b6-325e-458e-aa48-fd870f5e1bc6" />
+
 
 ## ✨ 核心功能
 
