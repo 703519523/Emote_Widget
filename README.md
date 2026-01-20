@@ -1,3 +1,7 @@
+<p>
+    简体中文 | <a href="docs/README_EN.md">English</a>
+</p>
+
 # EmoteWidget
 
 一个基于 PySide6 的、功能完备的动态角色显示组件，用于加载和控制 [FreeMote (E-mote)](https://github.com/UlyssesWu/FreeMote) (尤其是一些galgame中解包出来的) 模型。它提供了一套高级、纯粹的 Python API，将所有与底层 Web 引擎和 JavaScript 的复杂交互完全封装，让开发者可以轻松地将交互式 2D 角色集成到桌面应用中。
@@ -15,7 +19,13 @@
 *   **丰富的视觉特效**: 支持位置/缩放/旋转变换、全局透明度、灰度、顶点染色、背景图更换等多种视觉效果。
 *   **物理与环境模拟**: 支持调整头发、配件的物理摆动幅度，并可模拟全局风力效果。
 *   **内置交互**: 开箱即用地支持鼠标拖动、滚轮缩放和视线跟随。
-*   **完整的测试平台**: 提供一个功能齐全的图形化测试工具 `Tester.py`，允许用户无需编写代码即可探索和调试所有功能。
+*   **完整的测试平台**: 提供一个功能齐全的图形化测试工具 `Tester.py`，允许用户无需编写代码即可探索和调试大部分功能。
+
+## 💻 配置要求
+
+*   **操作系统**: Windows 10/11, macOS 11+, 或者 Linux (Ubuntu 20.04+, Arch, etc.)
+*   **Python版本**: 3.10 以及更高
+*   **依赖**: PySide6, 需要支持 Qt WebEngine
 
 ## 🚀 快速开始：使用测试平台
 
@@ -37,13 +47,15 @@ python Tester.py
 
 **3. 探索功能**
 
-测试平台提供了一个带标签页的界面，让你可以：
-*   **基本**: 动态加载和切换不同的 `.psb` 模型和背景图片。
-*   **变换/动画/外观/物理**: 通过滑块实时控制角色的缩放、旋转、动画速度、透明度、物理摆动和风力等。
-*   **绑定**: 实时查看和修改模型的底层变量绑定，调整参数范围、分类和特殊用途标签，并可将修改**保存到缓存**，极大简化了新模型的适配工作。
-*   **交互**: 测试鼠标拖动、滚轮缩放、视线跟随，以及从 `.wav` 文件启动的口型同步。
-*   **高级**: 测试差分动画、对话框系统，并能查询模型内部的详细数据。
-*   **插件**: 查看所有已加载的插件，并与其UI进行交互。
+测试平台 (`run_tests.py`) 提供了一个功能完备的带标签页界面，包含以下模块：
+
+*   **⚙️ 基本**: 动态加载和切换不同的 `.psb` 模型和背景图片，支持一键透明化窗口。
+*   **↔️ 变换/🎬 动画/🎨 外观/💨 物理**: 通过滑块实时控制角色的缩放、旋转、动画速度、透明度、物理摆动和风力等。
+*   **🔬 绑定**: 实时查看运行时自省获取的变量绑定，支持调整参数范围、分类和特殊用途标签，并可将修改**保存到缓存**。
+*   **🖱️ 交互**: 测试鼠标拖动、滚轮缩放、视线跟随，以及从 `.wav` 文件启动的口型同步。
+*   **💡 高级**: 测试差分动画、对话框系统，并能查询模型内部的详细数据。
+*   **🧩 插件**: 查看所有已加载的插件，并与其自定义 UI 进行交互。
+*   **💻 终端**: 内置交互式 Python 控制台，支持**代码自动补全**、历史记录和实时对象检查，方便开发者进行深度调试。
 
 ---
 
@@ -109,31 +121,34 @@ if __name__ == "__main__":
 
 ```
 .
-├── LICENSE                 # 本项目许可协议 (CC BY-NC-SA 4.0)
-├── Emote_Widget.py         # 主 SDK 组件
-├── Tester.py               # 功能测试与演示平台
-├── BoundParams.py          # 模型参数解包与缓存模块
-├── logger_config.py        # 日志配置
-├── requirements.txt        # Python 依赖项列表
+├── LICENSE                   # 本项目许可协议 (CC BY-NC-SA 4.0)
+├── run_tests.py              # [入口] 功能测试与演示平台 (原 Tester.py)
+├── emote_widget.py           # [核心] 主 SDK 组件 (PySide6 Widget)
+├── bound_params.py           # [核心] 运行时自省与参数智能映射模块
+├── logger_config.py          # 日志配置
+├── requirements.txt          # Python 依赖项列表
 │
-├── config/
-│ └ config.json             # 语义匹配规则配置文件
+├── config/                   # 配置文件目录
+│   └── config.json           # 语义匹配规则配置文件
 │
-├── web_frontend/           # 存放所有前端资源
-│ ├── pyside_webview.html   # 核心 HTML 页面，用于渲染模型
-│ ├── models/               # 存放 .psb 模型文件 (例如 chara.psb)
-│ ├── driver/               # JavaScript 驱动 (已合并到html中)
-│ │ ├ emoteplayer.js        # 此为 [Freemote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK) 提供的模型渲染API
-│ │ ├ FreeMoteDriver.js     # 此为 [Freemote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK) 提供的模型渲染核心
-│ │ └ LICENSE.FreeMote.txt  # FreeMote 许可协议 (必须与二进制文件同在)
-│ ├── dialogs/              # 对话框皮肤 (例如 default.html)
-│ │ └ default.html          # 默认对话框
-│ └── backgrounds/          # 背景图片 (例如 bg.png)
+├── web_frontend/             # [前端] 存放所有 Web 资源
+│   ├── pyside_webview.html   # 核心 HTML 页面，用于渲染模型
+│   ├── webview.css           # 主样式表 (处理镜像翻转、布局适配)
+│   ├── models/               # 存放 .psb 模型文件 (例如 chara.psb)
+│   ├── driver/               # 核心驱动 (FreeMote JS SDK)
+│   │   ├── emoteplayer.js    # 此为 [Freemote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK) 提供的模型渲染API
+│   │   └── FreeMoteDriver.js # 此为 [Freemote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK) 提供的模型渲染核心
+│   ├── splashscreen/         # 启动画面相关资源 (HTML/CSS/JS)
+│   ├── dialogs/              # 对话框皮肤模板
+│   └── backgrounds/          # 背景图片
 │
-└── plugins/                # 插件目录
-  ├── plugin_interface.py   # 所有插件必须继承的接口
-  └── debug_tools/          # 示例插件：调试工具
-    └ main.py               # 插件入口
+├── plugins/                  # [插件] 扩展插件目录
+│   ├── plugin_interface.py   # 插件接口定义
+│   └── debug_tools/          # [示例] 调试工具插件
+│       └── main.py
+│
+└── .emote_cache/             # [缓存] 自动生成的参数映射缓存 (自动创建)
+
 ```
 
 ## 📜 许可证 (License)

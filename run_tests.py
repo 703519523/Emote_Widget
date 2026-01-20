@@ -1,21 +1,294 @@
 import sys
 import os
+import io
 import json
+import traceback
+import builtins
 import logging
 import random
 from PySide6.QtCore import Qt, Slot, Signal, QTimer, QEvent
-from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QTextCursor, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QPushButton, QSlider, QLabel, QComboBox, 
                                QCheckBox, QGroupBox, QLineEdit, QTextEdit, QScrollArea, 
-                               QTabWidget, QDoubleSpinBox, QFileDialog, QSpinBox)
-from Emote_Widget import EmoteWidget as EmoteWidget
+                               QTabWidget, QDoubleSpinBox, QFileDialog, QListWidget, QSpinBox)
+from emote_widget import EmoteWidget as EmoteWidget
 
 logging.basicConfig(
     level=logging.DEBUG,  # 设置根日志记录器捕获 DEBUG 及以上级别的所有日志
     format='%(asctime)s - %(name)s - [%(levelname)s] - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+
+class CompletionPopup(QListWidget):
+    """悬浮的自动补全列表窗口"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+        self.setFocusPolicy(Qt.NoFocus) 
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        self.setStyleSheet("""
+            QListWidget {
+                background-color: #252526;
+                color: #cccccc;
+                border: 1px solid #454545;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 2px 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #04395e;
+                color: #ffffff;
+            }
+        """)
+        self.hide()
+
+    def update_candidates(self, candidates):
+        """更新列表内容，如果为空则隐藏"""
+        if not candidates:
+            self.hide()
+            return
+
+        self.clear()
+        self.addItems(candidates)
+        self.setCurrentRow(0)
+
+        item_height = 20 
+        count = min(len(candidates), 10) 
+        h = count * item_height + 4
+        self.setFixedHeight(h)
+        self.setFixedWidth(300)
+
+        if not self.isVisible():
+            self.show()
+
+class DebugConsole(QWidget):
+    def __init__(self, context: dict, parent=None):
+        super().__init__(parent)
+        self.context = context
+        self.history = []
+        self.history_index = 0
+
+        self._current_token_start = 0
+        self._completion_prefix = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        self.display = QTextEdit()
+        self.display.setReadOnly(True)
+        self.display.setStyleSheet("""
+            background-color: #1e1e1e; 
+            color: #d4d4d4; 
+            font-family: Consolas, 'Courier New', monospace; 
+            font-size: 12px;
+            border: none;
+        """)
+        self.display.setLineWrapMode(QTextEdit.WidgetWidth)
+
+        self.input_line = QLineEdit()
+        self.input_line.setStyleSheet("""
+            background-color: #3c3c3c; 
+            color: #ffffff; 
+            font-family: Consolas, 'Courier New', monospace; 
+            border: 1px solid #555;
+            padding: 2px;
+        """)
+        self.input_line.setPlaceholderText("输入 Python 代码... (实时补全, Enter 执行)")
+        
+        self.input_line.textEdited.connect(self._on_text_edited)
+        self.input_line.installEventFilter(self)
+
+        self.popup = CompletionPopup(self)
+        self.popup.itemClicked.connect(self._complete_from_popup)
+
+        self.help_label = QLabel(f"Context: {', '.join(list(self.context.keys())[:5])}...")
+        self.help_label.setStyleSheet("color: #666; font-size: 10px; padding-left: 4px;")
+
+        layout.addWidget(self.display)
+        layout.addWidget(self.help_label)
+        layout.addWidget(self.input_line)
+        
+        self._append_output("EmoteWidget Console Ready.\n", "#4CAF50")
+
+    def eventFilter(self, obj, event):
+        """
+        键盘事件拦截逻辑：
+        - 如果 Popup 显示：上下键选词，Tab/Enter 补全，Esc 关闭。
+        - 如果 Popup 隐藏：上下键查历史，Enter 执行。
+        """
+        if obj == self.input_line and event.type() == QEvent.KeyPress:
+            key = event.key()
+            is_popup_visible = self.popup.isVisible()
+            
+            if is_popup_visible:
+                if key in (Qt.Key_Down, Qt.Key_Up):
+                    count = self.popup.count()
+                    row = self.popup.currentRow()
+                    if key == Qt.Key_Down: row = (row + 1) % count
+                    else: row = (row - 1 + count) % count
+                    self.popup.setCurrentRow(row)
+                    return True 
+                
+                elif key in (Qt.Key_Tab, Qt.Key_Enter, Qt.Key_Return):
+                    self._complete_from_popup(self.popup.currentItem())
+                    return True
+                
+                elif key == Qt.Key_Escape:
+                    self.popup.hide()
+                    return True
+                
+            if key in (Qt.Key_Enter, Qt.Key_Return):
+                self._execute_command()
+                return True
+
+            if key == Qt.Key_Up:
+                self._navigate_history(-1)
+                return True
+            elif key == Qt.Key_Down:
+                self._navigate_history(1)
+                return True
+            elif key == Qt.Key_Tab:
+                self._on_text_edited(self.input_line.text())
+                return True
+                
+        return super().eventFilter(obj, event)
+
+    def _on_text_edited(self, text):
+        """实时分析输入内容，更新补全列表"""
+        cursor_pos = self.input_line.cursorPosition()
+        
+        left_part = text[:cursor_pos]
+        token_start = len(left_part)
+        for i in range(len(left_part) - 1, -1, -1):
+            char = left_part[i]
+            if not (char.isalnum() or char == '_' or char == '.'):
+                token_start = i + 1
+                break
+            if i == 0: token_start = 0
+        
+        token = left_part[token_start:]
+
+        if not token:
+            self.popup.hide()
+            return
+
+        self._current_token_start = token_start
+        self._completion_prefix = token
+
+        candidates = self._get_candidates(token)
+
+        if candidates:
+            rect = self.input_line.cursorRect()
+            global_pos = self.input_line.mapToGlobal(rect.bottomLeft())
+            global_pos.setX(global_pos.x() - 10)
+            
+            self.popup.move(global_pos)
+            self.popup.update_candidates(candidates)
+        else:
+            self.popup.hide()
+
+    def _get_candidates(self, token):
+        """根据 token 反射获取候选项列表"""
+        candidates = []
+        
+        if '.' in token:
+            parts = token.rsplit('.', 1)
+            obj_name = parts[0]
+            search_prefix = parts[1]
+            try:
+                obj = eval(obj_name, self.context)
+                candidates = [attr for attr in dir(obj) if attr.startswith(search_prefix)]
+            except:
+                pass
+        else:
+            context_keys = list(self.context.keys())
+            builtin_keys = dir(builtins)
+            all_globals = context_keys + builtin_keys
+            candidates = [name for name in all_globals if name.startswith(token)]
+            
+        return sorted(candidates)
+
+    def _complete_from_popup(self, item):
+        """点击列表项或按回车时，将词填入输入框"""
+        if not item: 
+            self.popup.hide()
+            return
+            
+        full_text = item.text()
+        current_text = self.input_line.text()
+        
+        if '.' in self._completion_prefix:
+            prefix_after_dot = self._completion_prefix.rsplit('.', 1)[1]
+            suffix_to_add = full_text[len(prefix_after_dot):]
+        else:
+            suffix_to_add = full_text[len(self._completion_prefix):]
+
+        self.input_line.insert(suffix_to_add)
+        self.popup.hide()
+
+    def _navigate_history(self, direction):
+        if not self.history: return
+        self.history_index = max(0, min(len(self.history), self.history_index + direction))
+        if self.history_index < len(self.history):
+            self.input_line.setText(self.history[self.history_index])
+        else:
+            self.input_line.clear()
+        self.popup.hide()
+
+    def _execute_command(self):
+        command = self.input_line.text().strip()
+        if not command: return
+
+        self.popup.hide()
+        if command.lower() in ["cls", "clear"]:
+            self.display.clear()
+            self.input_line.clear()
+            return
+
+        self._append_output(f">>> {command}", "#569CD6")
+        self.history.append(command)
+        self.history_index = len(self.history)
+        self.input_line.clear()
+
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        redirected_output = io.StringIO()
+        sys.stdout = redirected_output
+        sys.stderr = redirected_output
+
+        try:
+            try:
+                result = eval(command, self.context)
+                if result is not None:
+                    print(repr(result))
+            except SyntaxError:
+                exec(command, self.context)
+            
+            output = redirected_output.getvalue()
+            if output:
+                self._append_output(output.rstrip(), "#D4D4D4")
+
+        except Exception:
+            error_msg = traceback.format_exc()
+            self._append_output(error_msg.rstrip(), "#F44747")
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+    def _append_output(self, text, color):
+        cursor = self.display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.display.setTextCursor(cursor)
+        self.display.setTextColor(QColor(color))
+        self.display.insertPlainText(text + "\n")
+        self.display.verticalScrollBar().setValue(self.display.verticalScrollBar().maximum())
  
 class CheckableComboBox(QComboBox):
     """ 
@@ -220,7 +493,7 @@ class TestMainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self._create_all_control_tabs()
-        main_layout.addWidget(self.tabs, 1)
+        main_layout.addWidget(self.tabs, 2)
 
         self.emote_view.load_finished.connect(self._on_page_load)
         self.emote_view.player_ready.connect(self._on_player_ready)
@@ -268,6 +541,7 @@ class TestMainWindow(QMainWindow):
             "🖱️ 交互": self._create_interaction_controls,
             "💡 高级": self._create_advanced_controls,
             "🧩 插件": self._create_plugins_tab,
+            "💻 终端": self._create_console_tab,
         }
 
         for tab_name, creator_func in creators.items():
@@ -276,7 +550,8 @@ class TestMainWindow(QMainWindow):
             
             group_box = creator_func()
             tab_layout.addWidget(group_box)
-            tab_layout.addStretch()
+            if "终端" not in tab_name:
+                tab_layout.addStretch()
 
             self.tabs.addTab(tab_widget, tab_name)
 
@@ -546,6 +821,29 @@ class TestMainWindow(QMainWindow):
         main_layout.addWidget(scroll_area)
         
         return group
+    
+    def _create_console_tab(self):
+        """创建嵌入式调试控制台。"""
+        # 定义控制台的上下文环境
+        # 这里把常用的对象暴露给控制台
+        console_context = {
+            "EmoteWidget": self.emote_view,
+            "window": self,
+            "app": QApplication.instance(),
+            "os": os,
+            "json": json,
+            "bound_params": sys.modules.get('bound_params'),
+            "LoggerConfig": sys.modules.get('logger_config')
+        }
+        
+        console = DebugConsole(console_context)
+        
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(console)
+        
+        return container
 
     def _create_slider(self, internal_name, display_name, min_val, max_val, init_val, callback):
         layout = QHBoxLayout()

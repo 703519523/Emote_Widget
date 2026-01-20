@@ -9,13 +9,7 @@
     </script>
     <link rel="stylesheet" href="splashscreen/splash_screen.css">
     <script src="splashscreen/splashscreen.js"></script>
-    <style>
-        body, html { margin: 0; padding: 0; overflow: hidden; background-color: transparent; }
-        canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
-        canvas.draggable { cursor: grab; }
-        canvas.dragging { cursor: grabbing; }
-        #bg-div { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; background-size: cover; background-position: center; }
-    </style>
+    <link rel="stylesheet" href="webview.css">
 </head>
 <body>
     <div id="splash-screen">
@@ -61,6 +55,7 @@
     const DRAG_THRESHOLD = 5;
     let hoverTimeoutId = null;
     const HOVER_DELAY = 1000;
+    var isMirrored = false;
     let currentDialogTheme = null, dialogContainer = null, dialogText = null, hideDialogTimeout = null, typewritingTimeout = null, debounceTimeout = null, currentDialogText = "";
 
     // ==========================================================
@@ -152,8 +147,8 @@
             const modelHeight = bounds.bottom - bounds.top;
             if (modelWidth <= 0 || modelHeight <= 0) return;
 
-            const scaleX = canvas.clientWidth / modelWidth;
-            const scaleY = canvas.clientHeight / modelHeight;
+            const scaleX = canvas.width / modelWidth;
+            const scaleY = canvas.height / modelHeight;
             const scale = Math.min(scaleX, scaleY) * 0.95;
 
             const centerX = (bounds.left + bounds.right) / 2;
@@ -199,6 +194,20 @@
     
     function enablePlayerZoom(enable) {
         isZoomEnabled = enable;
+    }
+
+    // [TODO] Feature pending release:
+    // The visual flipping works via CSS, but the mouse/touch coordinate system
+    // needs to be mathematically inverted for interaction to work correctly.
+    // Currently hidden from Python API.
+    function setMirror(enable) {
+        isMirrored = enable;
+        const canvas = document.getElementById('emote-canvas');
+        if (enable) {
+            canvas.classList.add('mirrored');
+        } else {
+            canvas.classList.remove('mirrored');
+        }
     }
 
     // ==========================================================

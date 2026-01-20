@@ -12,7 +12,7 @@
 
 
 #版本号这一块
-__version__ = "0.0.1-A"
+__version__ = "0.0.2-A"
 
 import os
 import json
@@ -24,7 +24,7 @@ import collections
 import numpy as np
 import soundfile as sf
 import sounddevice as sd
-from PySide6.QtCore import Qt, QObject, Slot, Signal, QUrl, QThread, QPointF, QTimer
+from PySide6.QtCore import Qt, QObject, Slot, Signal, QUrl, QThread, QPointF, QTimer, Qt
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPolygonF
 from PySide6.QtWidgets import QWidget
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -34,8 +34,8 @@ import importlib
 import pkgutil
 from plugins.plugin_interface import IEmotePlugin
 
-import BoundParams
-from BoundParams import SpecialUsage
+import bound_params
+from bound_params import SpecialUsage
 from logger_config import emote_widget_logger as logger
 
 
@@ -205,7 +205,7 @@ class _PythonApiBridge(QObject):
 # ------------------------------------------------------------------------------
 class StreamLipSyncThread(QThread):
     """
-    (双EMA衰减版) 使用两个指数移动平均来追踪音频的基线和峰值，
+    使用两个指数移动平均来追踪音频的基线和峰值，
     实现高度自适应的口型同步。
     """
     mouth_open_ratio_updated = Signal(float)
@@ -516,8 +516,14 @@ class EmoteWidget(QWebEngineView):
 
 
         self.current_model_filename = None # 当前加载的模型文件名
+        
+        # --- 透明模式状态管理 ---
+        self._is_page_transparent = False
+        self._is_window_transparent = False
+        self._cached_window_flags = None
+        self._cached_bg_color = {"r": 255, "g": 255, "b": 255, "a": 1.0}
 
-        self.variable_map = BoundParams.get_default_map()
+        self.variable_map = bound_params.get_default_map()
 
         # --- 设置 QWebEngineView 和通信 ---
         self._bridge = _PythonApiBridge(self)
@@ -641,15 +647,15 @@ class EmoteWidget(QWebEngineView):
                 logger.warning("未能获取变量列表，自省失败。将使用空映射。")
                 self.variable_map = {}
             else:
-                cached_map = BoundParams.get_bound_map(self.current_model_filename)
+                cached_map = bound_params.get_bound_map(self.current_model_filename)
                 
                 if cached_map:
                     logger.info("使用缓存的变量映射。")
                     self.variable_map = cached_map
                 else:
                     logger.info("无缓存，正在进行语义分析...")
-                    self.variable_map = BoundParams.analyze_variable_list(raw_variable_list)
-                    BoundParams.update_cache(self.current_model_filename, self.variable_map)
+                    self.variable_map = bound_params.analyze_variable_list(raw_variable_list)
+                    bound_params.update_cache(self.current_model_filename, self.variable_map)
             logger.info(f"自省完成，已绑定 {len(self.variable_map)} 个参数。")
             self._player_is_ready = True
             self.player_ready.emit(timelines)
@@ -788,7 +794,7 @@ class EmoteWidget(QWebEngineView):
             return
         
         logger.info(f"正在将 '{self.current_model_filename}' 的绑定更新到缓存...")
-        BoundParams.update_cache(self.current_model_filename, self.variable_map)
+        bound_params.update_cache(self.current_model_filename, self.variable_map)
 
     def show(self):
         """
@@ -1025,6 +1031,12 @@ class EmoteWidget(QWebEngineView):
         这允许您将模型放置在任意颜色的背景之上，或者通过设置透明度
         为0，将其叠加在其他窗口组件之上（如果窗口本身支持透明）。
 
+        注意：
+        此函数仅控制 Web 视图内的背景色。
+        如果您希望实现整窗口透明效果，
+        请在调用此函数设置 a=0.0 的同时，调用 `set_window_transparent(True)`。
+        
+
         参数:
             r (int): 红色分量 (0-255)。
             g (int): 绿色分量 (0-255)。
@@ -1037,7 +1049,50 @@ class EmoteWidget(QWebEngineView):
             # 设置为完全透明的背景
             widget.set_background_color(0, 0, 0, 0.0)
         """
-        if self._controller: self._controller.set_background_color(r, g, b, a)
+        if self._controller:
+            if a == 0 and not self._is_page_transparent:
+                self._cached_bg_color
+                self.page().setBackgroundColor(Qt.GlobalColor.transparent)
+            elif self._is_page_transparent:
+                self._controller.set_background_color(self._cached_bg_color["r"], self._cached_bg_color["g"], self._cached_bg_color["b"], self._cached_bg_color["a"])
+            else:
+                self._cached_bg_color={"r": r, "g": g, "b": b, "a": a}
+                self._controller.set_background_color(r, g, b, a)
+
+    def set_window_transparent(self, enable: bool):
+        """
+        [侵入式操作] 开启或关闭顶层窗口的桌面透明（无边框）模式。
+        
+        开启后 (enable=True):
+        1. 顶层窗口变为无边框 (Frameless)。
+        2. 开启鼠标穿透属性 (TranslucentBackground)。
+        
+        关闭后 (enable=False):
+        1. 恢复之前的窗口边框和标题栏。
+        2. 关闭鼠标穿透。
+        """
+        window = self.window()
+        
+        if enable:
+            if not self._is_window_transparent:
+                self._cached_window_flags = window.windowFlags()
+                
+                window.setAttribute(Qt.WA_TranslucentBackground, True)
+                window.setWindowFlags(self._cached_window_flags | Qt.FramelessWindowHint)
+                
+                window.show()
+                self._is_window_transparent = True
+                logger.info("窗口已切换为透明")
+        else:
+            if self._is_window_transparent:
+                window.setAttribute(Qt.WA_TranslucentBackground, False)
+                
+                if self._cached_window_flags:
+                    window.setWindowFlags(self._cached_window_flags)
+                
+                window.show()
+                self._is_window_transparent = False
+                logger.info("窗口已恢复")
     
     def set_background_image(self, image_filename: str | None):
         """
@@ -1216,8 +1271,8 @@ class EmoteWidget(QWebEngineView):
         """
         # 使用 Python 的内省机制动态地从 BoundParams.SpecialUsage 类获取所有标签
         return [
-            getattr(BoundParams.SpecialUsage, attr) 
-            for attr in dir(BoundParams.SpecialUsage) 
+            getattr(bound_params.SpecialUsage, attr) 
+            for attr in dir(bound_params.SpecialUsage) 
             if not attr.startswith('__')
         ]
 
