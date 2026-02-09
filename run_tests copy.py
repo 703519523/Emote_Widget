@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QCheckBox, QGroupBox, QLineEdit, QTextEdit, QScrollArea, 
                                QTabWidget, QDoubleSpinBox, QFileDialog, QListWidget, QSpinBox)
 from emote_widget import EmoteWidget as EmoteWidget
-import emote_widget.utils.logger as logger_module
 
 logging.basicConfig(
     level=logging.DEBUG,  # 设置根日志记录器捕获 DEBUG 及以上级别的所有日志
@@ -833,9 +832,8 @@ class TestMainWindow(QMainWindow):
             "app": QApplication.instance(),
             "os": os,
             "json": json,
-            "bound_params": sys.modules.get('emote_widget.utils.bound_params'), # 修正模块名
-            "LoggerConfig": logger_module, # 修正模块引用
-            "controller": self.emote_view.controller # 方便调试 controller
+            "bound_params": sys.modules.get('bound_params'),
+            "LoggerConfig": sys.modules.get('logger_config')
         }
         
         console = DebugConsole(console_context)
