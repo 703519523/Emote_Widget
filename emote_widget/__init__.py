@@ -3,10 +3,10 @@ from .default_config.default_constants import __version__
 from .core.adapter_registry import AdapterRegistry
 from .core.controller import EmoteController
 
-from .ui.adapters.widget_adapter import WidgetAdapter
+from .ui.adapters.widget_Qt_adapter import WidgetAdapter
 AdapterRegistry.register("default")(WidgetAdapter)
 AdapterRegistry.register("qt")(WidgetAdapter)
-from .ui.views.widget import EmoteWidget
+from .ui.views.Qt_widget import EmoteWidget
 
 def _register_custom_scheme():
     if QWebEngineUrlScheme.schemeByName(b"emote").name() == b"emote":

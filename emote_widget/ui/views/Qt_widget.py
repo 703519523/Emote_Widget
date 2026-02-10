@@ -7,7 +7,7 @@ from PySide6.QtCore import QUrl, Signal, Qt
 
 from emote_widget.core.controller import EmoteController
 from emote_widget.core.scheme_handler import EmoteSchemeHandler
-from emote_widget.ui.adapters.widget_adapter import WidgetAdapter
+from emote_widget.ui.adapters.widget_Qt_adapter import WidgetAdapter
 from emote_widget.ui.common.lip_sync_monitor_widget import LipSyncMonitorWidget
 from emote_widget.core.resource_manager import ResourceManager
 from emote_widget.utils.logger import emote_widget_logger as logger

@@ -19,7 +19,14 @@ class ResourceManager:
 
     def register_cleanup_task(self, callback):
         """注册一个清理函数 (如 controller.cleanup)"""
-        if callable(callback):
+        if not callable(callback):
+            return
+
+        # 如果是绑定方法 (例如 self.controller.cleanup)，使用 WeakMethod
+        if hasattr(callback, '__self__') and hasattr(callback, '__func__'):
+            self._cleanup_tasks.append(weakref.WeakMethod(callback))
+        else:
+            # 普通函数直接存储 (或者也可以用 weakref.ref)
             self._cleanup_tasks.append(callback)
 
     def shutdown(self):
@@ -39,10 +46,17 @@ class ResourceManager:
                 logger.error(f"关闭窗口资源失败: {e}")
         
         # 2. 执行清理回调
-        for task in reversed(self._cleanup_tasks):
+        for task_ref in reversed(self._cleanup_tasks):
             try:
-                task()
+                # 如果是 WeakMethod/ref，需要先解引用
+                if isinstance(task_ref, (weakref.WeakMethod, weakref.ref)):
+                    func = task_ref()
+                    if func:
+                        func()
+                elif callable(task_ref):
+                    task_ref()
             except Exception as e:
                 logger.error(f"执行清理任务失败: {e}")
-        
+                
+        self._cleanup_tasks.clear()
         logger.info("清理完成。")

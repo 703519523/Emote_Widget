@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from emote_widget.ui.views.widget import EmoteWidget
+    from emote_widget.ui.views.Qt_widget import EmoteWidget
 
 class IEmotePlugin(ABC):
     """
