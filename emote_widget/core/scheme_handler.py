@@ -11,8 +11,6 @@ class EmoteSchemeHandler(QWebEngineUrlSchemeHandler):
     """
     def requestStarted(self, job: QWebEngineUrlRequestJob):
         url = job.requestUrl()
-        # url 格式: emote://resource/<path>
-        
         file_path = url.path()
         
         if os.name == 'nt' and file_path.startswith('/') and ':' in file_path:

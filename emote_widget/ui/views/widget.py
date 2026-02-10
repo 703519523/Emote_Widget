@@ -26,6 +26,15 @@ class EmoteWidget(QWebEngineView):
     on_character_clicked = Signal()
     on_character_hovered = Signal()
     
+    @property
+    def variable_map(self):
+        return self.controller.variable_map
+
+    # [新增] 如果需要写操作 (虽然 run_tests 里是直接改字典引用，但 setter 也是好习惯)
+    @variable_map.setter
+    def variable_map(self, value):
+        self.controller.variable_map = value
+    
     def __init__(self, parent=None, plugin_path: str = None, config_override: dict = None, **kwargs):
         super().__init__(parent)
 

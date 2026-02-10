@@ -1,0 +1,28 @@
+{
+  "semantic_rules": [
+    { "tag": "HEAD_LR", "category": "头部", "keywords": ["head_lr", "angle_x", "head_x"] },
+    { "tag": "HEAD_UD", "category": "头部", "keywords": ["head_ud", "angle_y", "head_y"] },
+    { "tag": null,      "category": "头部", "keywords": ["head_slant", "angle_z", "neck"] },
+    
+    { "tag": "EYE_LR",   "category": "眼睛", "keywords": ["eye_lr", "eyeball_x"] },
+    { "tag": "EYE_UD",   "category": "眼睛", "keywords": ["eye_ud", "eyeball_y"] },
+    { "tag": "EYE_OPEN", "category": "眼睛", "keywords": ["eye_open", "eye_close"] },
+    { "tag": null,       "category": "眼睛", "keywords": ["eye_sp", "hitomi", "pupil", "eye_hi"] },
+
+    { "tag": "MOUTH_OPEN", "category": "嘴部", "keywords": ["mouth_talk", "face_talk", "mouth_open"] },
+    { "tag": "MOUTH_FORM", "category": "嘴部", "keywords": ["mouth_shape", "face_mouth", "mouth_form"] },
+    
+    { "tag": "BODY_LR", "category": "身体", "keywords": ["body_lr", "body_x", "bust_x"] },
+    { "tag": "BODY_UD", "category": "身体", "keywords": ["body_ud", "body_y", "bust_y"] },
+    { "tag": null,      "category": "身体", "keywords": ["body_slant", "body_z"] },
+    
+    { "tag": null, "category": "位移", "keywords": ["move_lr", "position_x"] },
+    { "tag": null, "category": "位移", "keywords": ["move_ud", "position_y"] },
+    
+    { "tag": null, "category": "眉毛", "keywords": ["eyebrow"] },
+    { "tag": null, "category": "表情", "keywords": ["tears", "cheek", "blush", "emotion", "face_"] },
+    { "tag": null, "category": "物理", "keywords": ["hair", "bust", "quake", "skirt", "ribbon"] },
+    { "tag": null, "category": "显示", "keywords": ["fade", "visible", "show", "parts"] },
+    { "tag": null, "category": "特殊", "keywords": ["act_sp", "special", "arm", "hand", "vr_"] }
+  ]
+}

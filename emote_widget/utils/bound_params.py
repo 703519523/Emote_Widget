@@ -3,7 +3,12 @@ import os
 from .logger import bound_params_logger as logger
 
 CACHE_DIR = ".emote_cache"
-CONFIG_FILE = "config.json"
+
+# [修改] 动态计算包内默认配置文件的绝对路径
+# 路径结构: emote_widget/utils/bound_params.py -> (up 2) -> emote_widget/default_config/
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PACKAGE_ROOT = os.path.dirname(_CURRENT_DIR) 
+DEFAULT_CONFIG_PATH = os.path.join(_PACKAGE_ROOT, 'default_config', 'bound_params_config.json')
 
 class SpecialUsage:
     HEAD_LR = "HEAD_LR"
@@ -19,36 +24,50 @@ class SpecialUsage:
 def get_default_map():
     return {}
 
-def _load_semantic_rules():
-    """从 config.json 加载规则"""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "config", CONFIG_FILE)
+# [新增] 全局规则变量
+SEMANTIC_RULES = []
+
+# [修改] 新的配置加载函数，支持外部覆盖
+def load_config(config_path=None):
+    """
+    加载语义匹配规则。
+    如果不传路径，默认加载包内置的 bound_params_config.json。
+    """
+    global SEMANTIC_RULES
     
-    default_rules = [] # 如果文件不存在
+    target_path = config_path if config_path else DEFAULT_CONFIG_PATH
     
-    if not os.path.exists(config_path):
-        logger.warning(f"配置文件 {config_path} 不存在，将无法进行智能匹配。")
-        return default_rules
+    if not os.path.exists(target_path):
+        if config_path:
+            logger.warning(f"用户指定的配置文件不存在: {config_path}，将使用空规则。")
+        else:
+            # 默认配置不存在 (可能是开发环境缺失)，仅提示
+            logger.info(f"未找到默认参数配置文件: {target_path}，跳过。")
+        SEMANTIC_RULES = []
+        return
 
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-            return config.get("semantic_rules", [])
+        with open(target_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 兼容两种格式：直接列表 或 {"semantic_rules": [...]}
+            if isinstance(data, list):
+                SEMANTIC_RULES = data
+            else:
+                SEMANTIC_RULES = data.get("semantic_rules", [])
+        
+        source = "用户自定义" if config_path else "默认"
+        logger.info(f"已加载{source}语义规则: {target_path} (包含 {len(SEMANTIC_RULES)} 条规则)")
     except Exception as e:
-        logger.error(f"读取配置文件失败: {e}", exc_info=True)
-        return default_rules
+        logger.error(f"加载配置文件失败: {e}", exc_info=True)
+        SEMANTIC_RULES = []
 
-# 加载规则
-SEMANTIC_RULES = _load_semantic_rules()
+load_config()
 
 def analyze_variable_list(raw_variable_list: list) -> dict:
     """
     基于 config.json 的规则进行分析
     """
-    # 如果规则为空，尝试重新加载
     global SEMANTIC_RULES
-    if not SEMANTIC_RULES:
-        SEMANTIC_RULES = _load_semantic_rules()
 
     logger.info(f"开始分析 {len(raw_variable_list)} 个运行时变量...")
     

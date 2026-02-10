@@ -8,31 +8,28 @@ class _PythonApiBridge(QObject):
     # 当 JS 调用 on_player_ready 时，它会携带动画列表并被发射
     player_ready_signal = Signal(list)
 
-    on_character_clicked_signal = Signal(list)
+    on_character_clicked_signal = Signal()
 
-    on_character_hovered_signal = Signal(list)
+    on_character_hovered_signal = Signal()
 
-    def __init__(self,widget):
+    def __init__(self,widget=None):
         super().__init__()
-        self.widget=widget
 
     @Slot(list)
     def on_player_ready(self, timelines):
         """这个 @Slot 装饰器使该方法可以被 JavaScript 调用。"""
-        logger.debug(f"--> _PythonApiBridge.on_player_ready Slot CALLED by JS. Timelines count: {len(timelines)}")
+        logger.info(f"--> _PythonApiBridge.on_player_ready Slot CALLED by JS. Timelines count: {len(timelines)}")
         self.player_ready_signal.emit(timelines)
         
     @Slot()
     def js_on_character_click(self):
         """当 JS 检测到 canvas 被点击时调用此函数。"""
-        if self.widget:
-            self.on_character_clicked_signal.emit()
+        self.on_character_clicked_signal.emit()
 
     @Slot()
     def js_on_character_hover(self):
         """当 JS 检测到 canvas 被长悬停时调用此函数。"""
-        if self.widget:
-            self.on_character_hovered_signal.emit()
+        self.on_character_hovered_signal.emit()
 
     @Slot(str, str)
     def on_js_error(self, message, stack):

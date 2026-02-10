@@ -3,7 +3,7 @@
 <head>
     <title>Zako~Zako~</title>
     <meta charset="utf-8">
-    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script src="webchannel/qwebchannel.js"></script>
     <script>
         var Module = { TOTAL_MEMORY: 256 * 1024 * 1024 }; // 256MB
     </script>
@@ -46,6 +46,11 @@
     // ==========================================================
     let emotePlayer = null;
     let py_api = null;
+
+    let _bridgeResolver = null;
+    const bridgeReadyPromise = new Promise((resolve) => {
+        _bridgeResolver = resolve;
+    });
     
     const RENDER_WIDTH = 1024;
     const RENDER_HEIGHT = 1024 * (16/9); 
@@ -76,12 +81,17 @@
     // ==========================================================
     // ==  3. 初始化流程 
     // ==========================================================
-       window.addEventListener('DOMContentLoaded', () => {
-        new QWebChannel(qt.webChannelTransport, function (channel) {
-            py_api = channel.objects.py_api;
-        });
+    window.addEventListener('DOMContentLoaded', () => {
+        if (typeof qt !== 'undefined' && qt.webChannelTransport) {
+            new QWebChannel(qt.webChannelTransport, function (channel) {
+                py_api = channel.objects.py_api;
+                console.log("JS: WebChannel 连接成功，对象已挂载。");
+                if (_bridgeResolver) _bridgeResolver(py_api);
+            });
+        } else {
+            console.error("JS Critical: qt.webChannelTransport 未找到！无法建立通信。");
+        }
         setupEventListeners();
-        //loadDialogTheme('default'); 
     });
 
     // ==========================================================
@@ -111,7 +121,21 @@
             
             console.log("JS: 模型数据加载成功!");
             const timelines = emotePlayer.mainTimelineLabels || [];
-            if (py_api) py_api.on_player_ready(timelines);
+
+            if (!py_api) {
+                console.log("JS: 模型已加载，但 WebChannel 尚未握手，正在等待...");
+                await bridgeReadyPromise; 
+                console.log("JS: WebChannel 就绪，继续执行。");
+            }
+
+            // 此时 py_api 一定存在
+            if (py_api && typeof py_api.on_player_ready === 'function') {
+                py_api.on_player_ready(timelines);
+                console.log("JS: 信号已发送!");
+            } else {
+                console.error("JS Error: 即使等待后，py_api 依然无效，严重错误。");
+            }
+            
         } catch (err) {
             handleJsError(err, `loadNewModel('${modelUrl}')`);
             emotePlayer = null;
@@ -226,20 +250,31 @@
     }
 
     // --- 模块 A: 主题加载器 ---
+    // --- 模块 A: 主题加载器 (修改版) ---
     async function loadDialogTheme(themeUrl) {
         if (window.currentLoadedTheme === themeUrl) return;
 
         console.log(`[THEME] Loading theme from: ${themeUrl}`);
         
-        // [修改] 直接使用传入的 URL
-        const url = themeUrl;
         const dialogRoot = document.getElementById('dialog-root');
 
         try {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`Theme file load failed: ${response.statusText}`);
-            
-            const themeContent = await response.text();
+            // [修改] 使用 XMLHttpRequest 替代 fetch
+            // XHR 对自定义协议 (emote://) 的支持比 Fetch API 更友好
+            const themeContent = await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', themeUrl);
+                // 某些版本的 WebEngine 对自定义协议返回 status 0，视为成功
+                xhr.onload = () => {
+                    if ((xhr.status >= 200 && xhr.status < 300) || xhr.status === 0) {
+                        resolve(xhr.responseText);
+                    } else {
+                        reject(new Error(`Load failed, status: ${xhr.status}`));
+                    }
+                };
+                xhr.onerror = () => reject(new Error('Network Error (XHR)'));
+                xhr.send();
+            });
             
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = themeContent;
@@ -259,6 +294,7 @@
             dialogRoot.innerHTML = htmlElement.innerHTML;
             
             window.currentLoadedTheme = themeUrl;
+            console.log(`[THEME] Loaded successfully.`);
 
         } catch (err) {
             handleJsError(err, `loadDialogTheme('${themeUrl}')`);

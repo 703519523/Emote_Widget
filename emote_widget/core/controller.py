@@ -53,7 +53,7 @@ class EmoteController(QObject):
     lip_sync_debug_data = Signal(dict)
     """音频同步的调试信息，用于给外界组件接收"""
 
-    def __init__(self, view_adapter: IViewAdapter, plugin_dir=None, config_override=None):
+    def __init__(self, view_adapter: IViewAdapter, plugin_dir=None, config_override=None, bound_config_override=None):
         """初始化 EmoteWidgetController 组件。"""
 
         super().__init__()
@@ -68,6 +68,8 @@ class EmoteController(QObject):
                     self.config[key].update(value)
                 else:
                     self.config[key] = value
+        if bound_config_override:
+            bound_params.load_config(bound_config_override)
 
         self.js_player_name = "emotePlayer" 
         self._command_queue = []          # 指令队列
@@ -113,7 +115,12 @@ class EmoteController(QObject):
         self._bridge = _PythonApiBridge(self)
         
         # --- 连接内部信号 ---
+        self._bridge.on_character_clicked_signal.connect(self.on_character_clicked)
+        self._bridge.on_character_hovered_signal.connect(self.on_character_hovered)
+        
         self._bridge.player_ready_signal.connect(self._on_player_ready_handler)
+
+        self.view_adapter.register_python_bridge(self._bridge, "py_api")
 
     def _safe_run(self, js_code: str):
         """执行无返回值的 JS 代码 (支持队列缓存)"""
@@ -184,6 +191,9 @@ class EmoteController(QObject):
             
             self._update_splash_version()
             self._update_splash_main_progress(0.1, f"EmoteWidget v{__version__} 初始化...")
+
+            self._init_default_theme()
+
             self._update_splash_main_progress(0.2, "正在扫描插件目录...")
 
             self._plugin_loader_worker.scan_for_plugin_modules()
@@ -212,6 +222,18 @@ class EmoteController(QObject):
         self._perform_introspection(timelines)
 
     # --- 辅助方法 ---
+
+    def _init_default_theme(self):
+        """预加载默认对话框主题，防止后续报错"""
+        # 使用 utils 解析默认主题的绝对路径 URL
+        default_theme_url = resolve_resource_url("default.html", "dialogs")
+        if default_theme_url:
+            safe_url = json.dumps(default_theme_url)
+            logger.info("预加载默认对话框主题...")
+            # 直接调用 JS 的 loadDialogTheme
+            self._safe_run(f"loadDialogTheme({safe_url});")
+        else:
+            logger.warning("默认对话框主题 default.html 未找到，可能导致对话框功能异常。")
 
     def _check_if_all_ready(self):
         """
