@@ -1,5 +1,16 @@
 import weakref
+from typing import Protocol, Callable, Union, Any, List, TypeVar, Optional, cast
 from emote_widget.utils.logger import resource_logger as logger
+
+CleanupCallback = Callable[[], Any]
+T = TypeVar('T', bound=CleanupCallback)
+
+class WindowProtocol(Protocol):
+    """定义窗口对象需要实现的接口"""
+    def close(self) -> None:
+        """关闭窗口的方法"""
+        ...
+
 
 class ResourceManager:
     """
@@ -8,16 +19,16 @@ class ResourceManager:
     """
     def __init__(self):
         # 使用 WeakSet 存储窗口引用
-        # 优势：如果窗口已经被用户手动关闭并销毁了，这里会自动移除，不会导致访问已删除对象的崩溃
-        self._widgets = weakref.WeakSet()
-        self._cleanup_tasks = []
+        # 如果窗口已经被用户手动关闭并销毁了，这里会自动移除，不会导致访问已删除对象的崩溃
+        self._widgets: weakref.WeakSet[WindowProtocol] = weakref.WeakSet()
+        self._cleanup_tasks: List[Union[weakref.WeakMethod[CleanupCallback], CleanupCallback]] = []
 
-    def register_window(self, widget):
+    def register_window(self, widget: WindowProtocol) -> None:
         """注册一个附属窗口 (如监视器、设置面板)"""
         if widget:
             self._widgets.add(widget)
 
-    def register_cleanup_task(self, callback):
+    def register_cleanup_task(self, callback: CleanupCallback) -> None:
         """注册一个清理函数 (如 controller.cleanup)"""
         if not callable(callback):
             return
@@ -29,7 +40,7 @@ class ResourceManager:
             # 普通函数直接存储 (或者也可以用 weakref.ref)
             self._cleanup_tasks.append(callback)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """执行所有清理工作"""
         logger.info("开始清理资源...")
 
@@ -50,8 +61,8 @@ class ResourceManager:
             try:
                 # 如果是 WeakMethod/ref，需要先解引用
                 if isinstance(task_ref, (weakref.WeakMethod, weakref.ref)):
-                    func = task_ref()
-                    if func:
+                    func = cast(Optional[CleanupCallback], task_ref())
+                    if func is not None:
                         func()
                 elif callable(task_ref):
                     task_ref()

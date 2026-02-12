@@ -22,7 +22,7 @@ class WidgetAdapter(IViewAdapter):
 
     def run_javascript_with_callback(self, script: str, callback: Callable[[Any], None]) -> None:
         # Qt 的 runJavaScript 支持可选的 callback 参数
-        if callback:
+        if callback is not None:
             self.webview.page().runJavaScript(script, callback)
         else:
             self.webview.page().runJavaScript(script)
@@ -44,13 +44,13 @@ class WidgetAdapter(IViewAdapter):
 
         if transparent:
             # 开启透明穿透
-            window.setAttribute(Qt.WA_TranslucentBackground, True)
-            window.setWindowFlag(Qt.FramelessWindowHint, True)
+            window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            window.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
             window.show() # 更改 Flags 后通常需要重新 show
         else:
             # 关闭透明穿透 (恢复默认)
-            window.setAttribute(Qt.WA_TranslucentBackground, False)
-            window.setWindowFlag(Qt.FramelessWindowHint, False)
+            window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+            window.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
             window.show()
 
     def set_mouse_pass_through(self, enable: bool) -> None:

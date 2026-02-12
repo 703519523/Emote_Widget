@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
-
+import logging
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from emote_widget.ui.views.Qt_widget import EmoteWidget
+    from emote_widget.core.controller import EmoteController
 
 class IEmotePlugin(ABC):
     """
@@ -10,7 +10,14 @@ class IEmotePlugin(ABC):
 
     所有插件都必须继承自这个类，并实现其所有抽象方法。
     这确保了插件系统的一致性和可靠性。
+
+    Attributes:
+        logger: 插件专属的logger实例。在插件加载时由系统自动设置。
+                插件应该使用这个logger而不是print()来输出信息。
     """
+    def __init__(self) -> None:
+        super().__init__()
+        self.logger: logging.Logger
 
     @abstractmethod
     def get_name(self) -> str:
@@ -37,7 +44,7 @@ class IEmotePlugin(ABC):
         pass
 
     @abstractmethod
-    def initialize(self, widget: 'EmoteWidget'):
+    def initialize(self, widget: "EmoteController"):
         """
         插件的初始化入口点。
 

@@ -1,12 +1,20 @@
+from typing import Any
 from PySide6.QtWebEngineCore import QWebEngineUrlScheme
 from .default_config.default_constants import __version__
 from .core.adapter_registry import AdapterRegistry
 from .core.controller import EmoteController
 
-from .ui.adapters.widget_Qt_adapter import WidgetAdapter
+from .ui.adapters.qt_adapter import WidgetAdapter
+
+try:
+    from .ui.adapters.qml_adapter import QmlAdapter
+    AdapterRegistry.register("qml")(QmlAdapter)
+except ImportError:
+    pass
+
 AdapterRegistry.register("default")(WidgetAdapter)
 AdapterRegistry.register("qt")(WidgetAdapter)
-from .ui.views.Qt_widget import EmoteWidget
+from .ui.views.widget_qt import EmoteWidget
 
 def _register_custom_scheme():
     if QWebEngineUrlScheme.schemeByName(b"emote").name() == b"emote":
@@ -25,7 +33,7 @@ def _register_custom_scheme():
 _register_custom_scheme()
 
 
-def create_emote_widget(adapter_name: str = "default", plugin_dir: str = "./plugins", **kwargs):
+def create_emote_widget(adapter_name: str = "default", plugin_dir: str = "./plugins", **kwargs: Any):
     """
     [工厂函数] 创建 EmoteWidget 实例。
     

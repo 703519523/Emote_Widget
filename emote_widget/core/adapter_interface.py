@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 from emote_widget.utils.logger import emote_widget_logger as logger
 
 class IViewAdapter(ABC):
@@ -20,7 +20,7 @@ class IViewAdapter(ABC):
         pass
 
     @abstractmethod
-    def run_javascript_with_callback(self, script: str, callback: callable) -> None:
+    def run_javascript_with_callback(self, script: str, callback: Callable[[Any], None]) -> None:
         """
         [必须]
         执行 JS 并获取返回值（异步）

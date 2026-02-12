@@ -1,3 +1,4 @@
+# type: ignore
 import sys
 import os
 import io
@@ -763,7 +764,7 @@ class TestMainWindow(QMainWindow):
 
         self.monitor_check = QCheckBox("在独立窗口中显示监视器")
         self.monitor_check.toggled.connect(
-            lambda checked: self.emote_view.show_lip_sync_monitor(checked, as_window=True)
+            lambda checked: self.emote_view.show_lip_sync_monitor(show=checked)
         )
 
         lip_sync_layout.addWidget(self.lip_sync_file_btn)
@@ -923,7 +924,8 @@ class TestMainWindow(QMainWindow):
         """当所有插件都加载完成后，这个槽会被调用。"""
         print("\n主窗口: 收到插件加载完成信号！")
         try:
-            self.emote_view.plugins.debug.print_widget_size()
+            plugin=self.emote_view.api.plugins.get("debug")
+            plugin.print_widget_size()
         except AttributeError:
             print("主窗口: 未找到 'debug' 插件。")
 

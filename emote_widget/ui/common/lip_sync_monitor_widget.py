@@ -1,16 +1,19 @@
 # emote_widget/ui/common/monitor_widget.py
 
-import collections
+from collections import deque
+from typing import Optional, Dict
 from PySide6.QtCore import Qt, Slot, QPointF
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPolygonF
+from PySide6.QtGui import (QPainter, QColor, QPen, QFont, QPolygonF, QPaintEvent, 
+                          QPainter as QPainterClass)
 from PySide6.QtWidgets import QWidget
 
 class LipSyncMonitorWidget(QWidget):
+    _custom_font: QFont
     """
     [Qt 特有实现] 口型同步调试监视器
     只在基于 QtWidgets 的环境中使用。
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("音频同步监视器")
         self.setMinimumHeight(120)
@@ -18,8 +21,8 @@ class LipSyncMonitorWidget(QWidget):
         
         # 数据历史
         self.history_len = 200
-        self.rms_history = collections.deque(maxlen=self.history_len)
-        self.threshold_history = collections.deque(maxlen=self.history_len)
+        self.rms_history: deque[float] = deque(maxlen=self.history_len)
+        self.threshold_history: deque[float] = deque(maxlen=self.history_len)
         
         # 当前状态
         self.current_peak = 0.0
@@ -34,10 +37,10 @@ class LipSyncMonitorWidget(QWidget):
         self.threshold_color = QColor("#D0021B")
         self.text_color = QColor("#DDDDDD")
         self.grid_color = QColor("#444444")
-        self.font = QFont("Arial", 8)
+        self._custom_font = QFont("Arial", 8)
 
     @Slot(dict)
-    def update_data(self, data: dict):
+    def update_data(self, data: Dict[str, float]):
         """
         槽函数：接收来自 Controller 的纯数据字典
         """
@@ -56,9 +59,9 @@ class LipSyncMonitorWidget(QWidget):
         
         self.update() # 触发重绘
 
-    def paintEvent(self, event):
+    def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainterClass.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.bg_color)
         
         w, h = self.width(), self.height()
@@ -77,7 +80,7 @@ class LipSyncMonitorWidget(QWidget):
         painter.setPen(self.grid_color)
         for i in range(1, 4):
             y = padding + chart_height * (i / 4.0)
-            painter.drawLine(padding, y, w - padding, y)
+            painter.drawLine(padding, int(y), w - padding, int(y))
 
         # 2. 绘制柱状图 (Mean & Peak)
         bar_width = 30
@@ -98,7 +101,7 @@ class LipSyncMonitorWidget(QWidget):
         self._draw_polyline(painter, self.threshold_history, self.threshold_color, chart_y_origin, y_scale, w, padding, is_dash=True)
 
         # 5. 绘制文字
-        painter.setFont(self.font)
+        painter.setFont(self._custom_font)
         painter.setPen(self.text_color)
         painter.drawText(padding + 10, h - 2, f"Mean: {self.current_mean:.3f}")
         painter.drawText(padding + 90, h - 2, f"Peak: {self.current_peak:.3f}")
@@ -110,9 +113,11 @@ class LipSyncMonitorWidget(QWidget):
 
         painter.end()
 
-    def _draw_polyline(self, painter, data, color, y_origin, y_scale, w, padding, is_dash=False):
+    def _draw_polyline(self, painter: QPainter, data: deque[float], color: QColor, 
+                      y_origin: float, y_scale: float, w: int, padding: int, 
+                      is_dash: bool = False) -> None:
         pen = QPen(color, 1.5)
-        if is_dash: pen.setStyle(Qt.DashLine)
+        if is_dash: pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
         
         points = QPolygonF()

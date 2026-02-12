@@ -7,11 +7,11 @@ from emote_widget.utils.logger import file_logger as logger
 class EmoteSchemeHandler(QWebEngineUrlSchemeHandler):
     """
     自定义协议处理器: emote://
-    用于安全地加载本地资源，解决 file:// 协议的 CORS 问题。
+    用于安全地加载本地资源,解决 file:// 协议的 CORS 问题。
     """
-    def requestStarted(self, job: QWebEngineUrlRequestJob):
-        url = job.requestUrl()
-        file_path = url.path()
+    def requestStarted(self, job: QWebEngineUrlRequestJob) -> None:
+        url: QUrl = job.requestUrl()
+        file_path: str = url.path()
         
         if os.name == 'nt' and file_path.startswith('/') and ':' in file_path:
             file_path = file_path[1:]
@@ -23,22 +23,22 @@ class EmoteSchemeHandler(QWebEngineUrlSchemeHandler):
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
             return
 
+        mime_type: str | None
         mime_type, _ = mimetypes.guess_type(file_path)
         if mime_type is None:
             mime_type = "application/octet-stream"
 
         try:
-            file = open(file_path, 'rb')
-            content = file.read()
-            file.close()
+            with open(file_path, 'rb') as file:
+                content: bytes = file.read()
         except Exception as e:
             logger.error(f"[SchemeHandler] Read error: {e}")
             job.fail(QWebEngineUrlRequestJob.Error.UrlInvalid)
             return
 
-        buffer = QBuffer(job)
+        buffer: QBuffer = QBuffer(job)
         buffer.setData(content)
-        buffer.open(QIODevice.ReadOnly)
+        buffer.open(QIODevice.OpenModeFlag.ReadOnly)
         
         # 设置 CORS 头，允许 JS fetch()
         # 告诉浏览器：这个资源允许被任何页面请求

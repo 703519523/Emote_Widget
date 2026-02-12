@@ -1,8 +1,12 @@
 # emote_widget/core/lipsync.py
 import queue
 import numpy as np
+from typing import Union
+from numpy.typing import NDArray
 from PySide6.QtCore import QThread, Signal
 from emote_widget.utils.logger import emote_widget_logger as logger
+
+FloatArray = NDArray[np.float32]
 
 class StreamLipSyncThread(QThread):
     """
@@ -12,9 +16,9 @@ class StreamLipSyncThread(QThread):
     mouth_open_ratio_updated = Signal(float)
     debug_data_updated = Signal(dict)
 
-    def __init__(self, audio_queue: queue.Queue, 
-                 mean_decay_time=0.8, peak_decay_time=0.15, 
-                 update_fps=30, activation_ratio=0.3):
+    def __init__(self, audio_queue: queue.Queue[Union[FloatArray, None]], 
+                 mean_decay_time: float = 0.8, peak_decay_time: float = 0.15, 
+                 update_fps: int = 30, activation_ratio: float = 0.3) -> None:
         super().__init__()
         self.audio_queue = audio_queue
         self.is_running = False
@@ -29,7 +33,7 @@ class StreamLipSyncThread(QThread):
         self.peak_rms = 0.0
         self.activation_ratio = activation_ratio
 
-    def run(self):
+    def run(self) -> None:
         self.is_running = True
         logger.info("LipSyncThread 启动")
         
@@ -37,8 +41,10 @@ class StreamLipSyncThread(QThread):
             try:
                 audio_chunk = self.audio_queue.get(timeout=1)
                 if audio_chunk is None: break # 停止信号
+
+                if audio_chunk.size == 0: continue
                 
-                current_rms = np.sqrt(np.mean(audio_chunk**2))
+                current_rms = float(np.sqrt(np.mean(audio_chunk**2)))
                 
                 # 更新基线(Mean)和峰值(Peak)
                 self.mean_rms = self.mean_rms * self.mean_smoothing + current_rms * (1 - self.mean_smoothing)
@@ -70,6 +76,7 @@ class StreamLipSyncThread(QThread):
                 
         logger.info("LipSyncThread 停止")
 
-    def stop(self):
+    def stop(self) -> None:
         self.is_running = False
         self.audio_queue.put(None)
+        self.wait()

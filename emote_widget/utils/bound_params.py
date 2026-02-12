@@ -1,14 +1,20 @@
 import json
 import os
+from typing import Dict, List, Tuple, Any, Union
 from .logger import bound_params_logger as logger
 
-CACHE_DIR = ".emote_cache"
+# 定义类型别名
+BoundMapItem = Dict[str, Union[str, Tuple[float, float], List[str], Dict[float, str]]]
+BoundMap = Dict[str, BoundMapItem]
+SemanticRule = Dict[str, Union[List[str], str]]
 
-# [修改] 动态计算包内默认配置文件的绝对路径
-# 路径结构: emote_widget/utils/bound_params.py -> (up 2) -> emote_widget/default_config/
+# 包内文件路径
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PACKAGE_ROOT = os.path.dirname(_CURRENT_DIR) 
+_PACKAGE_ROOT = os.path.dirname(_CURRENT_DIR)
 DEFAULT_CONFIG_PATH = os.path.join(_PACKAGE_ROOT, 'default_config', 'bound_params_config.json')
+
+# 缓存目录（相对于工作目录）
+CACHE_DIR = ".emote_cache"
 
 class SpecialUsage:
     HEAD_LR = "HEAD_LR"
@@ -21,19 +27,17 @@ class SpecialUsage:
     BODY_LR = "BODY_LR"
     BODY_UD = "BODY_UD"
 
-def get_default_map():
+def get_default_map() -> BoundMap:
     return {}
 
-# [新增] 全局规则变量
-SEMANTIC_RULES = []
+_semantic_rules: List[SemanticRule] = []
 
-# [修改] 新的配置加载函数，支持外部覆盖
-def load_config(config_path=None):
+def load_config(config_path: str|None =None) -> None:
     """
     加载语义匹配规则。
     如果不传路径，默认加载包内置的 bound_params_config.json。
     """
-    global SEMANTIC_RULES
+    global _semantic_rules
     
     target_path = config_path if config_path else DEFAULT_CONFIG_PATH
     
@@ -43,35 +47,35 @@ def load_config(config_path=None):
         else:
             # 默认配置不存在 (可能是开发环境缺失)，仅提示
             logger.info(f"未找到默认参数配置文件: {target_path}，跳过。")
-        SEMANTIC_RULES = []
+        _semantic_rules = []
         return
 
     try:
         with open(target_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            data: Union[List[SemanticRule], Dict[str, List[SemanticRule]]] = json.load(f)
             # 兼容两种格式：直接列表 或 {"semantic_rules": [...]}
             if isinstance(data, list):
-                SEMANTIC_RULES = data
+                _semantic_rules = data
             else:
-                SEMANTIC_RULES = data.get("semantic_rules", [])
+                _semantic_rules = data.get("semantic_rules", [])
         
         source = "用户自定义" if config_path else "默认"
-        logger.info(f"已加载{source}语义规则: {target_path} (包含 {len(SEMANTIC_RULES)} 条规则)")
+        logger.info(f"已加载{source}语义规则: {target_path} (包含 {len(_semantic_rules)} 条规则)")
     except Exception as e:
         logger.error(f"加载配置文件失败: {e}", exc_info=True)
-        SEMANTIC_RULES = []
+        _semantic_rules = []
 
 load_config()
 
-def analyze_variable_list(raw_variable_list: list) -> dict:
+def analyze_variable_list(raw_variable_list: List[Dict[str, Any]]) -> BoundMap:
     """
     基于 config.json 的规则进行分析
     """
-    global SEMANTIC_RULES
+    global _semantic_rules
 
     logger.info(f"开始分析 {len(raw_variable_list)} 个运行时变量...")
     
-    bound_map = {}
+    bound_map: BoundMap = {}
     
     for var_info in raw_variable_list:
         var_name = var_info.get('label')
@@ -83,20 +87,23 @@ def analyze_variable_list(raw_variable_list: list) -> dict:
         
         # 默认值
         category = "未分类"
-        special_usage_list = []
+        special_usage_list: List[str] = []
         
         name_lower = var_name.lower()
         
-        for rule in SEMANTIC_RULES:
+        for rule in _semantic_rules:
             keywords = rule.get("keywords", [])
             if any(kw in name_lower for kw in keywords):
                 category = rule.get("category", "未分类")
                 tag = rule.get("tag")
                 if tag:
-                    special_usage_list.append(tag)
+                    if isinstance(tag, list):
+                        special_usage_list.extend(tag)
+                    else:
+                        special_usage_list.append(tag)
                 break
 
-        semantic_frames = {}
+        semantic_frames: Dict[float, str] = {}
         if frame_list:
             for frame in frame_list:
                 f_label = frame.get('label')
@@ -115,42 +122,58 @@ def analyze_variable_list(raw_variable_list: list) -> dict:
     logger.info(f"变量分析完成，生成了 {len(bound_map)} 个映射条目。")
     return bound_map
 
-def get_bound_map(model_path: str) -> dict:
-    """兼容性接口 仅读缓存，不解包"""
-    if not os.path.exists(model_path):
-        return get_default_map()
-
+def get_bound_map(model_path: str) -> BoundMap:
+    """
+    获取模型参数映射。优先从缓存加载，无缓存时返回空映射。
+    
+    Args:
+        model_path: 模型文件路径或文件名
+    """
     model_filename = os.path.basename(model_path)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cache_file = os.path.join(script_dir, CACHE_DIR, f"{model_filename}.map.json")
+    cache_file = os.path.join(os.getcwd(), CACHE_DIR, f"{model_filename}.map.json")
 
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 logger.info(f"从缓存加载映射: {model_filename}")
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"读取缓存失败: {e}", exc_info=True)
     
     logger.info(f"无缓存，将在模型加载后通过运行时自省生成映射: {model_filename}")
     return get_default_map()
 
-def update_cache(model_filename: str, new_map: dict):
-    """更新缓存"""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cache_dir_path = os.path.join(script_dir, CACHE_DIR)
-    if not os.path.exists(cache_dir_path):
-        os.makedirs(cache_dir_path)
+def update_cache(model_filename: str, new_map: BoundMap) -> bool:
+    """
+    更新参数映射缓存。
+    
+    Args:
+        model_filename: 模型文件名
+        new_map: 新的参数映射数据
         
+    Returns:
+        bool: 更新是否成功
+    """
+    # 确保使用的是文件名而不是路径
     model_filename = os.path.basename(model_filename)
+    
+    # 在当前工作目录下创建缓存目录
+    cache_dir_path = os.path.join(os.getcwd(), CACHE_DIR)
+    if not os.path.exists(cache_dir_path):
+        try:
+            os.makedirs(cache_dir_path)
+        except Exception as e:
+            logger.error(f"创建缓存目录失败: {e}", exc_info=True)
+            return False
+            
     cache_file = os.path.join(cache_dir_path, f"{model_filename}.map.json")
     
     try:
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(new_map, f, indent=4, ensure_ascii=False)
         return True
-    except Exception as e:
-        logger.error("更新缓存失败", exc_info=True)
+    except Exception as exc:
+        logger.error(f"更新缓存失败: {exc}", exc_info=True)
         return False
 
 load_map_from_cache = get_bound_map

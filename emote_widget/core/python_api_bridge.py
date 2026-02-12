@@ -1,9 +1,10 @@
 from PySide6.QtCore import QObject, Signal, Slot
 from emote_widget.utils.logger import emote_widget_logger as logger
+
 # ------------------------------------------------------------------------------
 #  内部通信桥梁
 # ------------------------------------------------------------------------------
-class _PythonApiBridge(QObject):
+class PythonApiBridge(QObject):
     """一个私有类，作为从 JavaScript 到 Python 的通信桥梁。"""
     # 当 JS 调用 on_player_ready 时，它会携带动画列表并被发射
     player_ready_signal = Signal(list)
@@ -12,11 +13,12 @@ class _PythonApiBridge(QObject):
 
     on_character_hovered_signal = Signal()
 
-    def __init__(self,widget=None):
+    def __init__(self, controller: 'QObject | None' = None):
         super().__init__()
+        self._controller = controller
 
     @Slot(list)
-    def on_player_ready(self, timelines):
+    def on_player_ready(self, timelines: list[str]):
         """这个 @Slot 装饰器使该方法可以被 JavaScript 调用。"""
         logger.info(f"--> _PythonApiBridge.on_player_ready Slot CALLED by JS. Timelines count: {len(timelines)}")
         self.player_ready_signal.emit(timelines)
@@ -32,6 +34,6 @@ class _PythonApiBridge(QObject):
         self.on_character_hovered_signal.emit()
 
     @Slot(str, str)
-    def on_js_error(self, message, stack):
+    def on_js_error(self, message: str, stack: str):
         """接收来自 JavaScript 的错误并记录。"""
         logger.error(f"[JavaScript Error]\n  Message: {message}\n  Stack: {stack}")
