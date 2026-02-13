@@ -15,6 +15,7 @@ except ImportError:
 AdapterRegistry.register("default")(WidgetAdapter)
 AdapterRegistry.register("qt")(WidgetAdapter)
 from .ui.views.widget_qt import EmoteWidget
+from .ui.views.widget_qml import EmoteWidgetQml
 
 def _register_custom_scheme():
     if QWebEngineUrlScheme.schemeByName(b"emote").name() == b"emote":
@@ -67,4 +68,4 @@ def create_emote_widget(adapter_name: str = "default", plugin_dir: str = "./plug
     
     return ui_handle, controller
 
-__all__ = ["EmoteWidget", "__version__", "create_emote_widget", "AdapterRegistry"]
+__all__ = ["EmoteWidget", "EmoteWidgetQml", "__version__", "create_emote_widget", "AdapterRegistry"]

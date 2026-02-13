@@ -13,6 +13,9 @@ class PythonApiBridge(QObject):
 
     on_character_hovered_signal = Signal()
 
+    # 通用查询回传信号，参数为 (request_id: str, result_json: str)
+    query_result_signal = Signal(str, str)
+
     def __init__(self, controller: 'QObject | None' = None):
         super().__init__()
         self._controller = controller
@@ -22,6 +25,18 @@ class PythonApiBridge(QObject):
         """这个 @Slot 装饰器使该方法可以被 JavaScript 调用。"""
         logger.info(f"--> _PythonApiBridge.on_player_ready Slot CALLED by JS. Timelines count: {len(timelines)}")
         self.player_ready_signal.emit(timelines)
+    
+    @Slot(str, "QVariant") 
+    def receive_query_result(self, request_id: str, result_json: str):
+        """
+        接收来自 JavaScript 的异步查询结果并转发。
+        
+        参数:
+            request_id (str): 查询请求的唯一标识符
+            result_json (str): JSON 格式的查询结果
+        """
+        logger.debug(f"--> Bridge.receive_query_result: {request_id[:8]}...")
+        self.query_result_signal.emit(request_id, result_json)
         
     @Slot()
     def js_on_character_click(self):

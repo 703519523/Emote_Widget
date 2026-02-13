@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import Any
 from emote_widget.utils.logger import emote_widget_logger as logger
 
 class IViewAdapter(ABC):
@@ -16,15 +16,9 @@ class IViewAdapter(ABC):
         """
         必须实现：在底层 Web 视图中执行 JS 代码。
         不允许抛出异常，失败应记录日志。
-        """
-        pass
 
-    @abstractmethod
-    def run_javascript_with_callback(self, script: str, callback: Callable[[Any], None]) -> None:
-        """
-        [必须]
-        执行 JS 并获取返回值（异步）
-        不允许抛出异常，失败应记录日志。
+        由于废弃了直接回调机制，现在所有带返回值的 JS 调用
+        都通过 Bridge 的信号机制来处理。
         """
         pass
     

@@ -1,26 +1,44 @@
-import QtQuick 2.15
-import QtQuick.Window 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Dialogs
-import "components"
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+// import QtWebEngine // 不再直接需要
+// import QtWebChannel // 不再直接需要
 
-Window {
-    id: mainWindow
+import "./components"
+import "." as App
+// 导入组件目录
+import "../../emote_widget/ui/views"
+
+ApplicationWindow {
+    id: root
     visible: true
-    width: 1200
-    height: 800
-    minimumWidth: 900
-    minimumHeight: 600
-    title: "EmoteWidget 测试器 - 现代化 UI"
+    width: 1280
+    height: 720
+    title: qsTr("EmoteWidget QML Tester")
     color: Style.backgroundColor
     
     // 当前选中的标签页索引
     property int currentTabIndex: 0
     
-    // 已加载的模型文件路径
-    property string loadedModelPath: ""
-    property string loadedModelName: ""
+    // 监听 EmoteBackend 信号
+    Connections {
+        target: EmoteBackend
+        
+        function onPlayerReady(timelines) {
+            console.log("QML: 模型就绪，动作数：", timelines.length)
+            controlPanel.loadModelBtn.enabled = true
+            controlPanel.statusText.text = "模型已加载 (动作数: " + timelines.length + ")"
+            controlPanel.motionList = timelines
+        }
+        
+        function onLoadFinished() {
+            console.log("QML: 网页加载完成")
+        }
+        
+        function onCharacterClicked() {
+            console.log("QML: 角色被点击")
+        }
+    }
     
     // 主布局
     Row {
@@ -33,19 +51,24 @@ Window {
             width: Style.sidebarWidth
             height: parent.height
             
-            // 添加阴影效果
-            layer.enabled: true
-            layer.effect: Item {
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.leftMargin: parent.width
-                    width: 8
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: Style.shadowColorLight }
-                        GradientStop { position: 1.0; color: "transparent" }
-                    }
-                }
-            }
+            // 绑定按钮事件到 EmoteBackend (使用新增的 Slot)
+            onLoadModelClicked: EmoteBackend.loadModel("chara.psb")
+            onPlayMotionClicked: (name) => EmoteBackend.playMotion(name)
+            onPlayVoiceClicked: (path) => EmoteBackend.playVoice(path)
+            onStopMotionClicked: EmoteBackend.stopMotion()
+            
+            onScaleChanged: (val) => EmoteBackend.setScale(val)
+            onRotationChanged: (val) => EmoteBackend.setRotation(val)
+            onPositionChanged: (x, y) => EmoteBackend.setPosition(x, y)
+            
+            onAlphaChanged: (val) => EmoteBackend.setAlpha(val)
+            onGrayscaleChanged: (val) => EmoteBackend.setGrayscale(val)
+            
+            onPhysicsChanged: (h, p, b) => EmoteBackend.setPhysics(h, p, b)
+            onWindChanged: (val) => EmoteBackend.setWind(val)
+            
+            onInteractionChanged: (d, z, g) => EmoteBackend.setInteraction(d, z, g)
+            onResetClicked: EmoteBackend.reset()
         }
         
         // 右侧主内容区域
@@ -86,227 +109,57 @@ Window {
                             
                             TabButton {
                                 text: "🎭 模型预览"
-                                isActive: mainWindow.currentTabIndex === 0
-                                onClicked: mainWindow.currentTabIndex = 0
+                                isActive: root.currentTabIndex === 0
+                                onClicked: root.currentTabIndex = 0
                             }
                             
                             TabButton {
                                 text: "🎨 控件展示"
-                                isActive: mainWindow.currentTabIndex === 1
-                                onClicked: mainWindow.currentTabIndex = 1
-                            }
-                        }
-                        
-                        // 右侧操作按钮
-                        Row {
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: Style.spacingMedium
-                            
-                            // 模型文件名显示
-                            Rectangle {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: modelNameText.width + Style.spacingLarge
-                                height: 36
-                                radius: Style.radiusMedium
-                                color: Style.accentColor
-                                opacity: 0.1
-                                visible: mainWindow.loadedModelName !== "" && mainWindow.currentTabIndex === 0
-                                
-                                Row {
-                                    anchors.centerIn: parent
-                                    spacing: Style.spacingSmall
-                                    
-                                    Text {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: "📁"
-                                        font.pixelSize: Style.fontSizeMedium
-                                    }
-                                    
-                                    Text {
-                                        id: modelNameText
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: mainWindow.loadedModelName
-                                        font.pixelSize: Style.fontSizeMedium
-                                        color: Style.accentColor
-                                        font.weight: Font.Medium
-                                    }
-                                }
-                            }
-                            
-                            CustomButton {
-                                text: mainWindow.loadedModelName === "" ? "📂 加载模型" : "🔄 重新加载"
-                                isPrimary: false
-                                visible: mainWindow.currentTabIndex === 0
-                                
-                                onClicked: {
-                                    fileDialog.open()
-                                }
-                            }
-                            
-                            CustomButton {
-                                text: "▶️ 开始测试"
-                                isPrimary: true
-                                visible: mainWindow.currentTabIndex === 0
-                                enabled: mainWindow.loadedModelName !== ""
-                                
-                                onClicked: {
-                                    console.log("开始测试模型:", mainWindow.loadedModelPath)
-                                }
+                                isActive: root.currentTabIndex === 1
+                                onClicked: root.currentTabIndex = 1
                             }
                         }
                     }
                 }
                 
-                // 内容区域 - 使用 StackLayout 实现标签页切换
+                // 内容区域
                 Item {
                     width: parent.width
                     height: parent.height - 60
                     clip: true
                     
                     // 模型预览页面
-                    PreviewPage {
-                        id: previewPage
+                    Rectangle {
                         anchors.fill: parent
-                        opacity: mainWindow.currentTabIndex === 0 ? 1 : 0
+                        opacity: root.currentTabIndex === 0 ? 1 : 0
                         visible: opacity > 0
+                        color: "#f5f5f5"
                         
-                        // 位置动画
-                        transform: Translate {
-                            x: mainWindow.currentTabIndex === 0 ? 0 : -50
+                        // 使用封装的 EmoteWidget 组件
+                        EmoteWidget {
+                            id: emoteView
+                            anchors.fill: parent
                             
-                            Behavior on x {
-                                NumberAnimation {
-                                    duration: Style.animationSlow
-                                    easing.type: Easing.OutCubic
-                                }
-                            }
-                        }
-                        
-                        // 透明度动画
-                        Behavior on opacity {
-                            NumberAnimation {
-                                duration: Style.animationSlow
-                                easing.type: Easing.OutCubic
+                            // 注入后端对象
+                            backend: EmoteBackend
+                            
+                            // 可选：设置背景色
+                            backgroundColor: "transparent"
+
+                            // 组件加载完成后设置默认模型
+                            Component.onCompleted: {
+                                backend.modelSource = "chara.psb"
                             }
                         }
                     }
                     
                     // 控件展示页面
                     WidgetShowcase {
-                        id: showcasePage
                         anchors.fill: parent
-                        opacity: mainWindow.currentTabIndex === 1 ? 1 : 0
+                        opacity: root.currentTabIndex === 1 ? 1 : 0
                         visible: opacity > 0
-                        
-                        // 位置动画
-                        transform: Translate {
-                            x: mainWindow.currentTabIndex === 1 ? 0 : 50
-                            
-                            Behavior on x {
-                                NumberAnimation {
-                                    duration: Style.animationSlow
-                                    easing.type: Easing.OutCubic
-                                }
-                            }
-                        }
-                        
-                        // 透明度动画
-                        Behavior on opacity {
-                            NumberAnimation {
-                                duration: Style.animationSlow
-                                easing.type: Easing.OutCubic
-                            }
-                        }
                     }
                 }
-            }
-        }
-    }
-    
-    // 文件选择对话框
-    FileDialog {
-        id: fileDialog
-        title: "选择 Emote 模型文件"
-        nameFilters: ["Emote 模型文件 (*.psb *.json)", "所有文件 (*)"]
-        
-        onAccepted: {
-            mainWindow.loadedModelPath = fileDialog.selectedFile.toString()
-            // 提取文件名
-            var path = mainWindow.loadedModelPath
-            var fileName = path.substring(path.lastIndexOf('/') + 1)
-            if (fileName.indexOf('\\') !== -1) {
-                fileName = fileName.substring(fileName.lastIndexOf('\\') + 1)
-            }
-            mainWindow.loadedModelName = fileName
-            
-            console.log("已选择模型文件:", mainWindow.loadedModelPath)
-            
-            // 显示加载成功提示
-            loadSuccessAnimation.restart()
-        }
-        
-        onRejected: {
-            console.log("取消选择文件")
-        }
-    }
-    
-    // 加载成功动画提示
-    Rectangle {
-        id: loadSuccessToast
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: parent.top
-        anchors.topMargin: 80
-        width: toastText.width + Style.spacingXLarge * 2
-        height: 48
-        radius: Style.radiusLarge
-        color: "#4CAF50"
-        opacity: 0
-        z: 1000
-        
-        Row {
-            anchors.centerIn: parent
-            spacing: Style.spacingMedium
-            
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "✓"
-                font.pixelSize: 20
-                font.weight: Font.Bold
-                color: "#FFFFFF"
-            }
-            
-            Text {
-                id: toastText
-                anchors.verticalCenter: parent.verticalCenter
-                text: "模型加载成功！"
-                font.pixelSize: Style.fontSizeMedium
-                font.weight: Font.Medium
-                color: "#FFFFFF"
-            }
-        }
-        
-        SequentialAnimation {
-            id: loadSuccessAnimation
-            
-            NumberAnimation {
-                target: loadSuccessToast
-                property: "opacity"
-                to: 1
-                duration: Style.animationNormal
-                easing.type: Easing.OutQuad
-            }
-            
-            PauseAnimation {
-                duration: 2000
-            }
-            
-            NumberAnimation {
-                target: loadSuccessToast
-                property: "opacity"
-                to: 0
-                duration: Style.animationNormal
-                easing.type: Easing.InQuad
             }
         }
     }

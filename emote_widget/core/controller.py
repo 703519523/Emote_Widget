@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import uuid
 import queue
 import threading
 from typing import Callable, Any, Optional
@@ -78,7 +79,8 @@ class EmoteController(QObject):
             bound_params.load_config(bound_config_override)
 
         self.js_player_name: str = "emotePlayer" 
-        self._command_queue: list[str] = []# 指令队列
+        self._command_queue: list[str] = []  # 指令队列
+        self._pending_queries: dict[str, Callable[[Any], None]] = {}  # 回调挂号表
 
         # 插件系统
         self.plugin_dir: str
@@ -126,8 +128,28 @@ class EmoteController(QObject):
         self._bridge.on_character_hovered_signal.connect(self.on_character_hovered)
         
         self._bridge.player_ready_signal.connect(self._on_player_ready_handler)
+        self._bridge.query_result_signal.connect(self._handle_query_result)
 
         self.view_adapter.register_python_bridge(self._bridge, "py_api")
+
+    @Slot(str,str)
+    def _handle_query_result(self, request_id: str, result_json: str | None):
+        """处理从 Bridge 回来的数据"""
+        # 1. 检查是否存在挂号
+        if request_id in self._pending_queries:
+            # 2. 取出并移除回调 (Pop)
+            callback = self._pending_queries.pop(request_id)
+            
+            try:
+                # 3. 解析数据
+                data = json.loads(result_json) if result_json is not None else None
+                callback(data)
+            except Exception as e:
+                logger.error(f"解析 JS 回传数据失败: {e}")
+                callback(None)
+        else:
+            # 可能是超时了或者 ID 错误，记录但不处理
+            logger.debug(f"收到未知 request_id 的查询结果: {request_id[:8]}...")
 
     def _safe_run(self, js_code: str):
         """执行无返回值的 JS 代码 (支持队列缓存)"""
@@ -139,14 +161,19 @@ class EmoteController(QObject):
         full_script = f"""
         (() => {{
             try {{ {js_code} }} catch(e) {{
-                if(window.py_api) window.py_api.on_js_error(e.message, e.stack);
+                if(py_api) py_api.on_js_error(e.message, e.stack);
             }}
         }})();
         """
         self.view_adapter.run_javascript(full_script)
 
     def _safe_query(self, expression: str, callback: Callable[[Any], None] | None) -> None:
-        """执行有返回值的 JS 查询 (异步回调，带空值检查)"""
+        """
+        执行有返回值的 JS 查询。
+        
+        不再使用 adapter 的 callback，而是通过 Bridge 异步回环。
+        查询结果将通过 query_result_signal 返回。
+        """
         if not self._player_is_ready:
             logger.warning("模型未就绪，无法执行查询。")
             if callback and callable(callback): 
@@ -157,31 +184,32 @@ class EmoteController(QObject):
             logger.warning(f"查询 '{expression}' 未提供有效的 callback，已跳过。")
             return
 
-        code = f"""
+        # 1. 生成请求 ID 并挂号
+        request_id = str(uuid.uuid4())
+        self._pending_queries[request_id] = callback
+
+        # 2. 构造 JS 包装器，结果通过 py_api 回传
+        js_code = f"""
         (() => {{
+            const reqId = "{request_id}";
             try {{
                 const res = {expression};
-                return JSON.stringify(res);
+                const payload = (res === undefined) ? null : JSON.stringify(res);
+                
+                if (py_api) {{
+                    py_api.receive_query_result(reqId, payload);
+                }}
             }} catch(e) {{
-                return null;
+                console.error("[Query Failed]", e);
+                if (py_api) {{
+                    py_api.receive_query_result(reqId, null);
+                }}
             }}
-        }})()
+        }})();
         """
-
-        def _json_wrapper(result: str | None) -> None:
-            if callback is None: return
-
-            if result is None:
-                callback(None)
-                return
-            try:
-                data = json.loads(result)
-                callback(data)
-            except Exception as e:
-                logger.error(f"解析 JS 返回数据失败: {e}")
-                callback(None)
-
-        self.view_adapter.run_javascript_with_callback(code, _json_wrapper)
+        
+        # 3. 发送 (Fire and Forget)
+        self.view_adapter.run_javascript(js_code)
 
 
     # --- 内部事件处理器 ---

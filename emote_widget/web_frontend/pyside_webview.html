@@ -85,7 +85,6 @@
         if (typeof qt !== 'undefined' && qt.webChannelTransport) {
             new QWebChannel(qt.webChannelTransport, function (channel) {
                 py_api = channel.objects.py_api;
-                console.log("JS: WebChannel 连接成功，对象已挂载。");
                 if (_bridgeResolver) _bridgeResolver(py_api);
             });
         } else {
@@ -123,17 +122,11 @@
             const timelines = emotePlayer.mainTimelineLabels || [];
 
             if (!py_api) {
-                console.log("JS: 模型已加载，但 WebChannel 尚未握手，正在等待...");
                 await bridgeReadyPromise; 
-                console.log("JS: WebChannel 就绪，继续执行。");
             }
 
-            // 此时 py_api 一定存在
             if (py_api && typeof py_api.on_player_ready === 'function') {
                 py_api.on_player_ready(timelines);
-                console.log("JS: 信号已发送!");
-            } else {
-                console.error("JS Error: 即使等待后，py_api 依然无效，严重错误。");
             }
             
         } catch (err) {

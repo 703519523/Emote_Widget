@@ -53,7 +53,8 @@ def stream_audio_file(
                             mono_chunk = audio_chunk
                         audio_queue.put(mono_chunk)
         except Exception as e:
-            logger.error(f"文件流播放出错: {e}", exc_info=True)
+            # 捕获异常并记录错误，但不打印堆栈跟踪，避免干扰控制台
+            logger.error(f"文件流播放出错: {e}")
         finally:
             audio_queue.put(None)
             logger.info("文件流结束。")

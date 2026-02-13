@@ -1,4 +1,3 @@
-from typing import Any, Callable
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtCore import Qt, QObject
@@ -19,13 +18,6 @@ class WidgetAdapter(IViewAdapter):
 
     def run_javascript(self, script: str) -> None:
         self.webview.page().runJavaScript(script)
-
-    def run_javascript_with_callback(self, script: str, callback: Callable[[Any], None]) -> None:
-        # Qt 的 runJavaScript 支持可选的 callback 参数
-        if callback is not None:
-            self.webview.page().runJavaScript(script, callback)
-        else:
-            self.webview.page().runJavaScript(script)
 
     def register_python_bridge(self, bridge_obj: QObject, name: str) -> None:
         """
