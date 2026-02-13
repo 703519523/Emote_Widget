@@ -210,3 +210,6 @@ __marimo__/
 
 # EmoteWidget产生的缓存
 .emote_cache/
+
+# 我用来测试的模型
+modellist/

@@ -612,7 +612,7 @@ class EmoteController(QObject):
         safe_name = json.dumps(timeline_name)
         self._safe_run(f'{self.js_player_name}.mainTimelineLabel = {safe_name};')
 
-    def animation_reset(self, duration_ms: int|None):
+    def animation_reset(self, duration_ms: int|None =None):
         """
         重置模型的所有状态到初始默认值。
 

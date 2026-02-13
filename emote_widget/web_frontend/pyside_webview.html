@@ -41,6 +41,21 @@
     <script src="driver/FreeMoteDriver.js"></script>
 
     <script>
+    // [HOOK] 强制开启 WebGL 抗锯齿 (MSAA)
+    (function() {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(type, attributes) {
+            if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
+                attributes = attributes || {};
+                attributes.antialias = true;
+                attributes.alpha = true;
+                attributes.preserveDrawingBuffer = true; // 可能需要此项以避免闪烁
+                // console.log(`[Hook] WebGL Context created with antialias=true for ${type}`);
+            }
+            return originalGetContext.call(this, type, attributes);
+        };
+    })();
+
     // ==========================================================
     // ==  1. 全局变量与核心配置
     // ==========================================================
@@ -52,8 +67,8 @@
         _bridgeResolver = resolve;
     });
     
-    const RENDER_WIDTH = 1024;
-    const RENDER_HEIGHT = 1024 * (16/9); 
+    const RENDER_WIDTH = 2048;
+    const RENDER_HEIGHT = 2048 * (16/9); 
 
     let isDragEnabled = false, isZoomEnabled = false, isGazeControlEnabled = false, isDragging = false, isConsideredDrag = false;
     let dragStartX, dragStartY;
@@ -61,7 +76,7 @@
     let hoverTimeoutId = null;
     const HOVER_DELAY = 1000;
     var isMirrored = false;
-    let currentDialogTheme = null, dialogContainer = null, dialogText = null, hideDialogTimeout = null, typewritingTimeout = null, debounceTimeout = null, currentDialogText = "";
+    let currentDialogTheme = null, dialogContainer = null, dialogText = null, hideDialogTimeout = null, typewritingTimeout = null, debounceTimeout = null, currentDialogText = "", resizeTimeout = null;
 
     // ==========================================================
     // ==  2. 全局 JS 错误处理器
@@ -108,9 +123,14 @@
 
             if (!emotePlayer) {
                 console.log(`JS: 首次加载，正在创建 EmotePlayer 实例...`);
-                canvas.width = RENDER_WIDTH;
-                canvas.height = RENDER_HEIGHT;
-                EmotePlayer.createRenderCanvas(RENDER_WIDTH, RENDER_HEIGHT);
+                // 动态适配分辨率 (x2 超采样以提升清晰度)
+                const scale = Math.max(window.devicePixelRatio || 1, 2.0);
+                const w = Math.floor((canvas.clientWidth || RENDER_WIDTH) * scale);
+                const h = Math.floor((canvas.clientHeight || RENDER_HEIGHT) * scale);
+                canvas.width = w;
+                canvas.height = h;
+                
+                EmotePlayer.createRenderCanvas(w, h);
                 emotePlayer = new EmotePlayer(canvas);
             }
 
@@ -243,7 +263,6 @@
     }
 
     // --- 模块 A: 主题加载器 ---
-    // --- 模块 A: 主题加载器 (修改版) ---
     async function loadDialogTheme(themeUrl) {
         if (window.currentLoadedTheme === themeUrl) return;
 
@@ -252,7 +271,7 @@
         const dialogRoot = document.getElementById('dialog-root');
 
         try {
-            // [修改] 使用 XMLHttpRequest 替代 fetch
+            // 使用 XMLHttpRequest 替代 fetch
             // XHR 对自定义协议 (emote://) 的支持比 Fetch API 更友好
             const themeContent = await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
@@ -505,7 +524,7 @@
     // ==  6. 连接 Python 与新对话框系统的桥梁
     // ==========================================================
     
-    // !! 辅助计算函数 !!
+    // 辅助计算函数
     function calculateDialogPosition(emotePlayerState, y_offset_px) {
         if (!dialogContainer || !emotePlayerState) return null;
 
@@ -558,6 +577,34 @@
             }
         });
         canvas.addEventListener('mouseleave', () => clearTimeout(hoverTimeoutId));
+
+        window.addEventListener('resize', () => {
+            // 使用防抖 (debounce) 避免频繁计算
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                // 动态调整 Canvas 分辨率 (x2 超采样)
+                const canvas = document.getElementById('emote-canvas');
+                const scale = Math.max(window.devicePixelRatio || 1, 2.0);
+                const w = Math.floor(canvas.clientWidth * scale);
+                const h = Math.floor(canvas.clientHeight * scale);
+                
+                // 只有当尺寸真的改变时才重置 (容差处理)
+                if (w && h && (Math.abs(canvas.width - w) > 1 || Math.abs(canvas.height - h) > 1)) {
+                    canvas.width = w;
+                    canvas.height = h;
+                    if (typeof EmotePlayer.createRenderCanvas === 'function') {
+                         EmotePlayer.createRenderCanvas(w, h);
+                    }
+                }
+
+                if (emotePlayer) {
+                    // 重新调整角色位置和大小以适应新窗口
+                    autoCenterPlayer(0); 
+                }
+                // 更新对话框位置
+                updateDialogPosition();
+            }, 100);
+        });
     }
     
     function onMouseDown(event) {
@@ -641,8 +688,11 @@
                 return false;
             }
             const canvas = document.getElementById('emote-canvas');
-            const textureX = Math.floor(x * (RENDER_WIDTH / canvas.clientWidth));
-            const textureY = Math.floor(y * (RENDER_HEIGHT / canvas.clientHeight));
+            // textureX/Y 必须映射到实际的 buffer 分辨率 (canvas.width/height)
+            // 而不是 CSS 显示尺寸 (canvas.clientWidth/clientHeight)
+            // 也不能使用 RENDER_WIDTH 常量，因为现在 buffer 尺寸是动态的
+            const textureX = Math.floor(x * (canvas.width / canvas.clientWidth));
+            const textureY = Math.floor(y * (canvas.height / canvas.clientHeight));
             
             // 确保 EmotePlayer.device.readPixelAlpha 存在
             if (typeof EmotePlayer.device.readPixelAlpha !== 'function') {
