@@ -24,11 +24,15 @@ class LipSyncConfig(TypedDict):
 class FileStreamingConfig(TypedDict):
     blocksize_hz: int
 
+class RenderConfig(TypedDict):
+    quality: str
+
 class Config(TypedDict):
     splash: SplashConfig
     animation: AnimationConfig
     lip_sync: LipSyncConfig
     file_streaming: FileStreamingConfig
+    render: RenderConfig
 
 DEFAULT_CONFIG: Config = {
     "splash": {
@@ -51,5 +55,8 @@ DEFAULT_CONFIG: Config = {
     },
     "file_streaming": {
         "blocksize_hz": 30,
+    },
+    "render": {
+        "quality": "auto"
     }
 }

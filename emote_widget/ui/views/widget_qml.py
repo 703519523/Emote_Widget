@@ -285,3 +285,9 @@ class EmoteWidgetQml(QObject):
         """重置状态"""
         if self.controller:
             self.controller.animation_reset(1000)
+
+    @Slot(str)
+    def setRenderQuality(self, mode: str):
+        """设置渲染画质"""
+        if self.controller:
+            self.controller.set_render_quality(mode)

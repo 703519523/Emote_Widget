@@ -21,6 +21,7 @@ Rectangle {
     
     signal alphaChanged(real value)
     signal grayscaleChanged(real value)
+    signal renderQualityChanged(string mode)
     
     signal physicsChanged(real hair, real parts, real bust)
     signal windChanged(real value)
@@ -228,6 +229,16 @@ Rectangle {
                             from: 0; to: 1.0; value: 0
                             Layout.fillWidth: true
                             onMoved: controlPanel.grayscaleChanged(value)
+                        }
+                        
+                        Label { text: "渲染画质" }
+                        ComboBox {
+                            model: ["auto", "low", "high", "ultra"]
+                            Layout.fillWidth: true
+                            currentIndex: 0
+                            onActivated: (index) => {
+                                controlPanel.renderQualityChanged(currentText)
+                            }
                         }
                     }
                 }

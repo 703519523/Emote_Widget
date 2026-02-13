@@ -63,6 +63,7 @@ ApplicationWindow {
             
             onAlphaChanged: (val) => EmoteBackend.setAlpha(val)
             onGrayscaleChanged: (val) => EmoteBackend.setGrayscale(val)
+            onRenderQualityChanged: (mode) => EmoteBackend.setRenderQuality(mode)
             
             onPhysicsChanged: (h, p, b) => EmoteBackend.setPhysics(h, p, b)
             onWindChanged: (val) => EmoteBackend.setWind(val)

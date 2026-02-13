@@ -654,10 +654,20 @@ class TestMainWindow(QMainWindow):
         self.color_btn.clicked.connect(self._toggle_vertex_color)
         self.vertex_colors = ["#FF3030", "#80FF80", "#8080FF", "#FFFFFF"]
         self.current_color_index = 0
+
+        # 渲染画质控制
+        quality_layout = QHBoxLayout()
+        quality_layout.addWidget(QLabel("渲染画质:"))
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItems(["auto", "low", "high", "ultra"])
+        self.quality_combo.setToolTip("auto: 跟随系统DPI\nlow: 1.0x\nhigh: 2.0x\nultra: 4.0x")
+        self.quality_combo.currentTextChanged.connect(self.emote_view.controller.set_render_quality)
+        quality_layout.addWidget(self.quality_combo)
         
         layout.addLayout(self.alpha_slider_layout)
         layout.addLayout(self.gray_slider_layout)
         layout.addWidget(self.color_btn)
+        layout.addLayout(quality_layout)
         return group
 
     def _create_physics_controls(self):

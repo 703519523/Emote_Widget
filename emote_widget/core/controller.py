@@ -225,6 +225,10 @@ class EmoteController(QObject):
             self._update_splash_version()
             self._update_splash_main_progress(0.1, f"EmoteWidget v{__version__} 初始化...")
 
+            # 初始化渲染画质
+            initial_quality = self.config.get('render', {}).get('quality', 'auto')
+            self.set_render_quality(initial_quality)
+
             self._init_default_theme()
 
             self._update_splash_main_progress(0.2, "正在扫描插件目录...")
@@ -878,6 +882,27 @@ class EmoteController(QObject):
             widget.set_wind(0)
         """
         self._safe_run(f'{self.js_player_name}.windSpeed = {speed}; {self.js_player_name}.windPowMin = {power_min}; {self.js_player_name}.windPowMax = {power_max};')
+
+    def set_render_quality(self, mode: str):
+        """
+        设置渲染画质模式。
+
+        参数:
+            mode (str): 画质模式。可选值:
+                - "low": 1.0x 原始分辨率 (性能最佳)
+                - "high": 2.0x 超采样 (清晰度高)
+                - "ultra": 4.0x 极致超采样 (极高消耗)
+                - "auto": 跟随系统 DPI (默认)
+        """
+        valid_modes = ["low", "high", "ultra", "auto"]
+        if mode not in valid_modes:
+            logger.warning(f"set_render_quality: 未知的模式 '{mode}'，将回退到 'auto'。")
+            mode = "auto"
+        
+        self.config.setdefault('render', {})['quality'] = mode
+        safe_mode = json.dumps(mode)
+        logger.info(f"设置渲染画质为: {mode}")
+        self._safe_run(f"setRenderQuality({safe_mode});")
 
 
     # --- 6. 数据查询 (Data Query) ---

@@ -183,52 +183,88 @@ class EmoteDevice
         this.playerList = [];
         this.animating = false;
         this.date = new Date();
+        // --- 修改开始 ---
+        this.hitTestFBO = null;
+        // --- 修改结束 ---
         return true;
     }
     
     // --- 修改开始 ---
+    onResize(width, height) {
+        this.width = width;
+        this.height = height;
+        
+        // 1. Resize Render Buffer in C++ Core
+        if (typeof EmoteDevice_ChangeFrameBufferSize === 'function')
+            EmoteDevice_ChangeFrameBufferSize(width, height);
+        
+        // 2. Resize Render Texture
+        if (typeof EmoteDevice_CreateEmoteTexture2 === 'function')
+            this.renderTexture = EmoteDevice_CreateEmoteTexture2(width, height);
+        
+        // 3. Update WebGL Viewport & Buffers
+        if (this.gl) {
+            const gl = this.gl;
+            gl.viewport(0, 0, width, height);
+            
+            // Update Vertex Buffer (Screen Quad)
+            const data = [ 
+                    -(this.width/2), -(this.height/2), 0,
+                (this.width/2), -(this.height/2), 0,
+                (this.width/2),  (this.height/2), 0,
+                    -(this.width/2),  (this.height/2), 0
+            ];
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexPositionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+            
+            const textureCoords = [0, this.height,this.width, this.height,this.width,0,0,0];
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.coordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+        }
+    }
+
     readPixelAlpha(x, y) {
         if (!this.gl || !this.renderTexture) {
             return 0;
         }
         const gl = this.gl;
 
-        // 1. 从 C++ 核心获取原始的、渲染好的纹理
+        // 1. 获取源纹理
         const sourceTexture = EmoteDevice_GetEmoteTexture2Tex(this.renderTexture);
         if (!sourceTexture) {
             return 0;
         }
 
-        // 2. 创建一个临时的帧缓冲对象 (FBO)
-        const tempFbo = gl.createFramebuffer();
-
-        // 3. 绑定 FBO 并将源纹理直接附加到它上面
-        gl.bindFramebuffer(gl.FRAMEBUFFER, tempFbo);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sourceTexture, 0);
-
-        // 4. 检查 FBO 状态，确保它可以被读取
-        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-        if (status !== gl.FRAMEBUFFER_COMPLETE) {
-            // 如果不完整，清理并返回
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            gl.deleteFramebuffer(tempFbo);
-            return 0;
+        // 2. 懒加载创建 FBO，并复用
+        if (!this.hitTestFBO) {
+            this.hitTestFBO = gl.createFramebuffer();
         }
 
-        // 5. 读取单个像素
-        const pixelData = new Uint8Array(4);
-        // WebGL Y坐标系的原点在左下角，所以 Y 轴需要翻转
-        const sourceY = this.height - 1 - y;
-        gl.readPixels(x, sourceY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixelData);
+        // 3. 备份当前正在使用的 FBO (防止打断渲染流程)
+        const currentFBO = gl.getParameter(gl.FRAMEBUFFER_BINDING);
 
-        // 6. 清理所有临时对象，恢复默认状态
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.deleteFramebuffer(tempFbo);
-
-        // 7. 返回 Alpha 分量
-        const alpha = pixelData[3];
+        // 4. 绑定测试 FBO 并挂载纹理
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.hitTestFBO);
         
-        return alpha;
+        // 必须每次重新挂载，因为 sourceTexture 在 Resize 后可能会变
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sourceTexture, 0);
+
+        // 5. 读取像素
+        const pixelData = new Uint8Array(4);
+        // 坐标系翻转：WebGL 纹理原点在左下角
+        const sourceY = this.height - 1 - y;
+        
+        // 边界检查：防止读取超出纹理范围导致报错
+        if (x >= 0 && y >= 0 && x < this.width && y < this.height) {
+             gl.readPixels(x, sourceY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixelData);
+        }
+
+        // 6. 恢复之前的 FBO 绑定
+        gl.bindFramebuffer(gl.FRAMEBUFFER, currentFBO);
+
+        // 7. 这里的 FBO 不销毁，留给下次用
+        
+        return pixelData[3]; // 返回 Alpha
     }
     // --- 修改结束 ---
 
@@ -1326,6 +1362,16 @@ EmotePlayer.setRenderCanvas = (canvas) => {
 };
 
 EmotePlayer.createRenderCanvas = (width, height) => {
+// --- 修改开始 ---
+    if (EmotePlayer.renderCanvas) {
+        EmotePlayer.renderCanvas.width = width;
+        EmotePlayer.renderCanvas.height = height;
+        if (EmotePlayer.device) {
+             EmotePlayer.device.onResize(width, height);
+        }
+        return;
+    }
+// --- 修改结束 ---
     const body = document.getElementsByTagName("body")[0];
     if (body == null)
         alert("can't state body element on DOM.");
