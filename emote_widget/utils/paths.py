@@ -9,11 +9,34 @@ from .logger import file_logger as logger
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_FRONTEND_ROOT = os.path.join(_BASE_DIR, 'web_frontend')
 
+# [Security] 允许访问的根目录白名单
+ALLOWED_RESOURCE_ROOTS: List[str] = [WEB_FRONTEND_ROOT]
+
 RESOURCE_SEARCH_PATHS: Dict[str, List[str]] = {
     'models': [],
     'backgrounds': [],
     'dialogs': []
 }
+
+def register_allowed_path(path: str) -> None:
+    """
+    注册一个允许被前端访问的根目录。
+    这对于安全性至关重要，防止路径穿越攻击。
+    """
+    abs_path = os.path.abspath(path)
+    # 检查是否已经包含在现有白名单中（或者是子目录）
+    for root in ALLOWED_RESOURCE_ROOTS:
+        if abs_path.startswith(root):
+            return 
+            
+    if abs_path not in ALLOWED_RESOURCE_ROOTS:
+        ALLOWED_RESOURCE_ROOTS.append(abs_path)
+        logger.info(f"[Security] 注册安全访问路径: {abs_path}")
+
+def is_path_allowed(path: str) -> bool:
+    """检查路径是否在允许的白名单内"""
+    abs_path = os.path.abspath(path)
+    return any(abs_path.startswith(root) for root in ALLOWED_RESOURCE_ROOTS)
 
 def add_resource_directory(category: str, path: str) -> None:
     """
@@ -24,6 +47,7 @@ def add_resource_directory(category: str, path: str) -> None:
         abs_path = os.path.abspath(path)
         if abs_path not in RESOURCE_SEARCH_PATHS[category]:
             RESOURCE_SEARCH_PATHS[category].insert(0, abs_path) # Insert at beginning to prioritize user paths
+            register_allowed_path(abs_path) # 同时注册到安全白名单
             resolve_resource_url.cache_clear()
             logger.info(f"添加资源搜索路径 [{category}]: {abs_path}")
 
@@ -64,6 +88,11 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
                 final_path = internal_path
     
     if final_path:
+        # [Security] 二次校验：确保解析出的绝对路径在白名单内
+        if not is_path_allowed(final_path):
+            logger.warning(f"[Security] 拦截非法路径访问尝试: {final_path}")
+            return None
+
         # 转换为 emote:// 协议
         # 格式: emote://resource/<path>
         # QUrl.fromLocalFile 生成 file:///C:/...

@@ -1,17 +1,27 @@
 // ==========================================================
-// ==  Core Renderer Module
-// ==  Responsible for EmotePlayer lifecycle, rendering quality, and canvas management
+// ==  Core Renderer Module (核心渲染模块)
+// ==  Responsibility: EmotePlayer 生命周期管理、画质控制、画布适配
 // ==========================================================
 
+/**
+ * 本模块是 Web 前端的核心，负责：
+ * 1. 管理 Live2D/EmotePlayer 实例的创建与销毁。
+ * 2. 处理模型加载逻辑 (loadNewModel)。
+ * 3. 处理窗口大小变化与 Canvas 分辨率自适应。
+ * 4. 提供画质调节 API (setRenderQuality)。
+ */
+
 // [HOOK] Force WebGL Antialiasing (MSAA)
+// 强制开启 WebGL 抗锯齿，这对于 Live2D 模型的边缘平滑度非常重要。
+// 由于某些 EmotePlayer 版本内部可能默认关闭，这里通过 Hook 强制开启。
 (function() {
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type, attributes) {
         if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
             attributes = attributes || {};
-            attributes.antialias = true;
-            attributes.alpha = true;
-            attributes.preserveDrawingBuffer = true; // Required to avoid flickering
+            attributes.antialias = true; // 开启 MSAA
+            attributes.alpha = true;     // 允许背景透明
+            attributes.preserveDrawingBuffer = true; // 允许 readPixels (对 MaskSampler 至关重要)
             // console.log(`[Hook] WebGL Context created with antialias=true for ${type}`);
         }
         return originalGetContext.call(this, type, attributes);
@@ -19,9 +29,9 @@
 })();
 
 // Global Variables (Exposed for Python API and other modules)
-window.emotePlayer = null;
-window.RENDER_WIDTH = 2048;
-window.RENDER_HEIGHT = 2048 * (16/9); 
+window.emotePlayer = null; // 当前 EmotePlayer 实例
+window.RENDER_WIDTH = 2048; // 默认渲染分辨率宽
+window.RENDER_HEIGHT = 2048 * (16/9); // 默认渲染分辨率高
 window.currentScaleMode = 'auto';
 window.currentScaleFactor = 1.0;
 window.isMirrored = false;
@@ -33,6 +43,10 @@ let resizeTimeout = null;
 // ==  Public API (Called by Python)
 // ==========================================================
 
+/**
+ * 设置渲染画质 (超采样倍率)。
+ * @param {string} mode - 'low'(1x), 'high'(2x), 'ultra'(4x), 'auto'(DPI跟随)
+ */
 window.setRenderQuality = function(mode) {
     window.currentScaleMode = mode || 'auto';
     console.log(`[Render] Setting render quality to: ${window.currentScaleMode}`);
@@ -49,40 +63,45 @@ window.setRenderQuality = function(mode) {
             break;
         case 'auto':
         default:
-            // Auto mode: follow system scaling, at least 1.0
+            // Auto mode: follow system DPI (devicePixelRatio), minimum 1.0
+            // 这在高分屏 (4K/Retina) 上能获得最佳清晰度
             window.currentScaleFactor = Math.max(window.devicePixelRatio || 1.0, 1.0);
             break;
     }
 
-    // Apply new scaling immediately
+    // Apply new scaling immediately by triggering resize
     const canvas = document.getElementById('emote-canvas');
     if (canvas) {
-        // Trigger resize logic to apply new resolution
         window.dispatchEvent(new Event('resize'));
     }
 }
 
+/**
+ * 加载新模型。
+ * @param {string} modelUrl - 模型的 emote:// URL
+ */
 window.loadNewModel = async function(modelUrl) {
     console.log(`JS: Received command, loading model URL: '${modelUrl}'`);
     try {
         const canvas = document.getElementById('emote-canvas');
         
-        // Remove listener if player exists to avoid memory leaks or duplicate calls
+        // Remove old listeners to prevent memory leaks
         if (window.emotePlayer) {
-            // Note: debouncedUpdateDialogPosition comes from dialog_system.js
             if (typeof window.debouncedUpdateDialogPosition === 'function') {
                 window.emotePlayer.off('transformchange', window.debouncedUpdateDialogPosition);
             }
         }
 
+        // Lazy Initialization: Create player only on first load
         if (!window.emotePlayer) {
             console.log(`JS: First load, creating EmotePlayer instance...`);
             
-            // Dynamic resolution adaptation
+            // Initial resolution setup
             if (window.currentScaleMode === 'auto') {
                 window.currentScaleFactor = Math.max(window.devicePixelRatio || 1.0, 1.0); 
             }
             
+            // Calculate physical pixel size
             const w = Math.floor((canvas.clientWidth || window.RENDER_WIDTH) * window.currentScaleFactor);
             const h = Math.floor((canvas.clientHeight || window.RENDER_HEIGHT) * window.currentScaleFactor);
             
@@ -91,25 +110,30 @@ window.loadNewModel = async function(modelUrl) {
             canvas.width = w;
             canvas.height = h;
             
+            // Initialize EmotePlayer runtime
             EmotePlayer.createRenderCanvas(w, h);
             window.emotePlayer = new EmotePlayer(canvas);
         }
 
+        // Load data asynchronously
         await window.emotePlayer.promiseLoadDataFromURL(modelUrl);
 
-        // Re-attach listener if dialog system is present
+        // Re-attach listeners (e.g., sync dialog position when model moves)
         if (typeof window.debouncedUpdateDialogPosition === 'function') {
             window.emotePlayer.on('transformchange', window.debouncedUpdateDialogPosition);
         }
         
         console.log("JS: Model data loaded successfully!");
+        
+        // Get available animations
         const timelines = window.emotePlayer.mainTimelineLabels || [];
 
-        // Wait for bridge if not ready (bridgeReadyPromise from bridge_manager.js)
+        // Ensure Bridge is ready before calling Python
         if (!window.py_api && window.bridgeReadyPromise) {
             await window.bridgeReadyPromise; 
         }
 
+        // Notify Python: Player Ready
         if (window.py_api && typeof window.py_api.on_player_ready === 'function') {
             window.py_api.on_player_ready(timelines);
         }
@@ -120,6 +144,7 @@ window.loadNewModel = async function(modelUrl) {
         } else {
             console.error(err);
         }
+        // If critical error, reset player instance
         window.emotePlayer = null;
     }
 }
@@ -141,6 +166,10 @@ window.setBackgroundImage = function(imageUrl) {
     }
 }
 
+/**
+ * 自动居中模型。
+ * 计算模型的 AABB 包围盒，自动缩放和平移以适应当前窗口大小。
+ */
 window.autoCenterPlayer = function(duration) {
     try {
         if (!window.emotePlayer || !window.emotePlayer.isCharaProfileAvailable) return;
@@ -152,9 +181,10 @@ window.autoCenterPlayer = function(duration) {
         const modelHeight = bounds.bottom - bounds.top;
         if (modelWidth <= 0 || modelHeight <= 0) return;
         
+        // Calculate fit scale (contain mode)
         const scaleX = canvas.width / modelWidth;
         const scaleY = canvas.height / modelHeight;
-        const scale = Math.min(scaleX, scaleY) * 0.95;
+        const scale = Math.min(scaleX, scaleY) * 0.95; // 5% padding
 
         const centerX = (bounds.left + bounds.right) / 2;
         const centerY = (bounds.top + bounds.bottom) / 2;
@@ -170,18 +200,21 @@ window.setMirror = function(enable) {
     window.isMirrored = enable;
     const canvas = document.getElementById('emote-canvas');
     if (enable) {
-        canvas.classList.add('mirrored');
+        canvas.classList.add('mirrored'); // Apply CSS transform: scaleX(-1)
     } else {
         canvas.classList.remove('mirrored');
     }
 }
 
-// Window Resize Handler
+// ==========================================================
+// ==  Window Resize Handling
+// ==========================================================
+
 window.addEventListener('resize', () => {
-    // Debounce to avoid frequent calculations
+    // Debounce: Wait for resize to finish before re-allocating buffers
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => {
-        // Dynamic Canvas Resolution Adjustment
+        // Recalculate scale factor if in auto mode
         if (window.currentScaleMode === 'auto') {
                 window.currentScaleFactor = Math.max(window.devicePixelRatio || 1.0, 1.0);
         }
@@ -189,10 +222,11 @@ window.addEventListener('resize', () => {
         const canvas = document.getElementById('emote-canvas');
         if (!canvas) return;
 
+        // Calculate new physical resolution
         const w = Math.floor(canvas.clientWidth * window.currentScaleFactor);
         const h = Math.floor(canvas.clientHeight * window.currentScaleFactor);
         
-        // Only reset if size actually changed (tolerance check)
+        // Resize WebGL Context
         if (w && h && (Math.abs(canvas.width - w) > 1 || Math.abs(canvas.height - h) > 1)) {
             console.log(`[Render] Resizing canvas to: ${w}x${h} (Scale: ${window.currentScaleFactor})`);
             canvas.width = w;
@@ -207,7 +241,7 @@ window.addEventListener('resize', () => {
             window.autoCenterPlayer(0); 
         }
         
-        // Update dialog position if the function exists
+        // Update dialog position
         if (typeof window.updateDialogPosition === 'function') {
             window.updateDialogPosition();
         }

@@ -1,19 +1,43 @@
-// ==========================================================
-// ==  Mask Sampler Module
-// ==  Handles pixel sampling for click-through transparency
-// ==========================================================
+/**
+ * ==========================================================
+ * Mask Sampler Module (遮罩采样器)
+ * ==========================================================
+ * 
+ * 职责 (Responsibility):
+ * 负责高效地从 WebGL 画布中读取像素数据，识别非透明区域（即角色本体），
+ * 并将其转换为一组简化的矩形列表 (Rects)。
+ * 这些矩形将通过 Python Bridge 发送回 Native 层，用于设置操作系统窗口的
+ * 输入遮罩 (Input Mask)，实现精确的“点击穿透”效果。
+ * 
+ * 核心挑战 (Core Challenge):
+ * 1. 性能: 像素读取 (glReadPixels) 和 CPU 遍历是非常昂贵的操作，必须在 JS 线程
+ *    中保持极高的效率，以免阻塞 UI 渲染。
+ * 2. 碎片化: 如果生成的矩形太多（例如每隔一个像素一个矩形），会导致操作系统
+ *    的窗口管理器 (DWM/X11) 处理缓慢。
+ * 
+ * 解决方案 (Solution):
+ * 采用自定义的 **2D 扫描线贪心网格合并算法 (Greedy Meshing)**。
+ * 该算法能在单次遍历中，根据物体的主体走向（横向或纵向），
+ * 智能地将相邻的有效网格合并为最大的可能矩形，从而将矩形数量
+ * 从几千个减少到几十个。
+ */
 
 // Global State
 window.lastMaskJson = "";
 window.maskUpdatePending = false;
 window.isClickThroughSamplingEnabled = false;
-window.MASK_GRID_W = 30;
-window.MASK_GRID_H = 30;
+window.MASK_GRID_W = 30; // 网格单元宽度 (像素)
+window.MASK_GRID_H = 30; // 网格单元高度 (像素)
 
 // ==========================================================
 // ==  Public API
 // ==========================================================
 
+/**
+ * 设置采样网格的大小。
+ * 网格越小，边缘越精细，但性能开销越大；
+ * 网格越大，性能越好，但点击判定边缘会有“锯齿感”。
+ */
 window.setMaskGridSize = function(width, height) {
     if (width > 0 && height > 0) {
         window.MASK_GRID_W = width;
@@ -22,11 +46,15 @@ window.setMaskGridSize = function(width, height) {
     }
 }
 
+/**
+ * 开启或关闭采样循环。
+ * 由 Python 控制器在透明模式切换时调用。
+ */
 window.setClickThroughMode = function(enable) {
     console.log(`[ClickThrough] Sampling Enabled: ${enable}`);
     window.isClickThroughSamplingEnabled = enable;
     if (!enable) {
-        // When disabled, we don't send anything. Controller decides fallback.
+        // 关闭时不需要发空数据，Native 层会自行清理
     }
 }
 
@@ -38,15 +66,17 @@ window.updateHitTestMask = function() {
     if (!window.isClickThroughSamplingEnabled) return;
     if (window.maskUpdatePending) return;
     
+    // 使用 requestAnimationFrame 确保在浏览器空闲时执行，
+    // 避免与渲染主循环争抢资源。
     window.maskUpdatePending = true;
-    // Use requestAnimationFrame to avoid blocking the UI thread
     requestAnimationFrame(() => {
         window.maskUpdatePending = false;
         window.performMaskSampling();
     });
 }
 
-// Start the sampling loop
+// 启动定时器：每 200ms 执行一次采样。
+// 5FPS 的更新频率对于点击穿透来说通常足够了。
 setInterval(window.updateHitTestMask, 200);
 
 // ==========================================================
@@ -56,6 +86,7 @@ setInterval(window.updateHitTestMask, 200);
 window.performMaskSampling = function() {
     if (!window.isClickThroughSamplingEnabled) return;
     if (!window.py_api || !window.emotePlayer || !window.emotePlayer.initialized) return;
+    // 依赖 Live2D 的 EmotePlayer 对象
     if (typeof EmotePlayer === 'undefined' || !EmotePlayer.device) return;
 
     const canvas = document.getElementById('emote-canvas');
@@ -65,49 +96,58 @@ window.performMaskSampling = function() {
     const height = canvas.height;
     
     try {
+        // --- 1. WebGL 像素读取 ---
+        // 从 Live2D 内部的 Framebuffer 读取渲染结果
         const device = EmotePlayer.device;
         if (!device.renderTexture || !device.gl) return;
 
         const gl = device.gl;
         const currentFBO = gl.getParameter(gl.FRAMEBUFFER_BINDING);
         
+        // 创建或复用一个专用 FBO 用于读取
         if (!device.hitTestFBO) device.hitTestFBO = gl.createFramebuffer();
         
         gl.bindFramebuffer(gl.FRAMEBUFFER, device.hitTestFBO);
+        // 获取 Live2D 渲染纹理
         const tex = EmoteDevice_GetEmoteTexture2Tex(device.renderTexture);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
         
+        // 读取像素 (RGBA)
+        // 优化点：其实只需要读取 Alpha 通道，但 WebGL 1.0 readPixels 对 FORMAT 有限制
         const pixels = new Uint8Array(width * height * 4);
         gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, currentFBO);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, currentFBO); // 恢复之前的 FBO
         
+        // --- 2. 网格化 (Gridding) ---
         const GRID_W = window.MASK_GRID_W || 30; 
         const GRID_H = window.MASK_GRID_H || 30; 
         
-        // Step 1: Build Grid & Statistics
         const cols = Math.ceil(width / GRID_W);
         const rows = Math.ceil(height / GRID_H);
         const grid = new Uint8Array(rows * cols);
         
-        // Stats for orientation detection
-        const rowWeights = new Uint32Array(rows);
-        const colWeights = new Uint32Array(cols);
+        // 统计数组：用于判断物体主要走向
+        const rowWeights = new Uint32Array(rows); // 每行有多少个有效格子
+        const colWeights = new Uint32Array(cols); // 每列有多少个有效格子
         
         const halfGW = Math.floor(GRID_W / 2);
         const halfGH = Math.floor(GRID_H / 2);
         
+        // 遍历所有网格
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
                 const pxStart = c * GRID_W;
                 const pyStart = r * GRID_H;
                 
-                // 5-point sampling
+                // 5点采样法 (5-point sampling)
+                // 不检查网格内所有像素（太慢），而是检查中心点和四个角。
+                // 只要有一个点的 Alpha > 10，就认为该网格“有内容”。
                 const points = [
-                    { x: pxStart + halfGW, y: pyStart + halfGH },
-                    { x: pxStart, y: pyStart },
-                    { x: pxStart + GRID_W - 1, y: pyStart },
-                    { x: pxStart, y: pyStart + GRID_H - 1 },
-                    { x: pxStart + GRID_W - 1, y: pyStart + GRID_H - 1 }
+                    { x: pxStart + halfGW, y: pyStart + halfGH }, // Center
+                    { x: pxStart, y: pyStart },                   // Top-Left
+                    { x: pxStart + GRID_W - 1, y: pyStart },      // Top-Right
+                    { x: pxStart, y: pyStart + GRID_H - 1 },      // Bottom-Left
+                    { x: pxStart + GRID_W - 1, y: pyStart + GRID_H - 1 } // Bottom-Right
                 ];
                 
                 let hasContent = 0;
@@ -115,13 +155,16 @@ window.performMaskSampling = function() {
                     const px = points[i].x;
                     const py = points[i].y;
                     if (px >= width || py >= height) continue;
+                    
+                    // WebGL 坐标系 Y 轴是翻转的，需要转换
                     const glY = height - 1 - py;
-                    const idx = (glY * width + px) * 4 + 3;
-                    if (pixels[idx] > 10) {
+                    const idx = (glY * width + px) * 4 + 3; // Alpha channel index
+                    if (pixels[idx] > 10) { // Threshold
                         hasContent = 1;
                         break;
                     }
                 }
+                
                 if (hasContent) {
                     grid[r * cols + c] = 1;
                     rowWeights[r]++;
@@ -130,16 +173,13 @@ window.performMaskSampling = function() {
             }
         }
         
-        // Step 2: Determine Global Orientation
-        let maxRowWeight = 0;
-        for(let r=0; r<rows; r++) if(rowWeights[r] > maxRowWeight) maxRowWeight = rowWeights[r];
+        // --- 3. 姿态检测 (Orientation Detection) ---
+        // 为了优化合并效果，我们需要知道角色是“站着”还是“躺着”。
+        // 站立的角色（纵向长）适合优先纵向合并；躺着的角色（横向长）适合横向合并。
         
-        let maxColWeight = 0;
-        for(let c=0; c<cols; c++) if(colWeights[c] > maxColWeight) maxColWeight = colWeights[c];
-
-        // Calculate average non-zero width/height
+        // 计算平均有效宽度和高度
         let totalW = 0, countW = 0;
-        const cutoffRow = maxRowWeight * 0.1; // Filter noise
+        const cutoffRow = Math.max(...rowWeights) * 0.1; // 过滤噪点
         for(let r=0; r<rows; r++) {
             if(rowWeights[r] > cutoffRow) {
                 totalW += rowWeights[r];
@@ -149,7 +189,7 @@ window.performMaskSampling = function() {
         const avgW = countW > 0 ? totalW / countW : 0;
 
         let totalH = 0, countH = 0;
-        const cutoffCol = maxColWeight * 0.1;
+        const cutoffCol = Math.max(...colWeights) * 0.1;
         for(let c=0; c<cols; c++) {
             if(colWeights[c] > cutoffCol) {
                 totalH += colWeights[c];
@@ -158,25 +198,36 @@ window.performMaskSampling = function() {
         }
         const avgH = countH > 0 ? totalH / countH : 0;
         
-        // Check if explicitly horizontal (e.g. lying down)
-        // If avgW is significantly larger than avgH, we enforce Horizontal Greedy
+        // 如果平均宽度显著大于平均高度（1.1倍），则认为是横向姿态（如躺倒动作）
         const isHorizontalBody = avgW > (avgH * 1.1); 
         
-        // Step 3: Strict Directional Greedy Meshing
+        // --- 4. 严格方向贪心合并 (Strict Directional Greedy Meshing) ---
+        // 这是一个改进版的 Greedy Meshing 算法。
+        // 普通算法在合并时比较随意，容易产生大量细长的碎片。
+        // 本算法强制优先沿“主方向”延伸，并且禁止“切断”未来的主方向合并机会。
+        
         const visited = new Uint8Array(rows * cols);
         const rects = []; 
-        const logicScale = 1.0 / (window.currentScaleFactor || 1.0);
+        
+        // 获取逻辑缩放因子（High DPI 屏幕适配）
+        let factor = window.currentScaleFactor;
+        if (typeof factor !== 'number' || factor <= 0.001) {
+            factor = 1.0;
+        }
+        const logicScale = 1.0 / factor;
         
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
                 const idx = r * cols + c;
                 if (grid[idx] === 0 || visited[idx] === 1) continue;
                 
+                // 开始一个新的矩形合并
                 let finalW = 0, finalH = 0;
                 
                 if (isHorizontalBody) {
-                    // --- FORCE HORIZONTAL STRATEGY ---
-                    // 1. Find Max Width
+                    // === 策略 A: 强制横向优先 (Horizontal First) ===
+                    
+                    // 1. 尽可能向右延伸 (Find Max Width)
                     let w = 1;
                     while (c + w < cols) {
                         const nextIdx = r * cols + (c + w);
@@ -184,21 +235,24 @@ window.performMaskSampling = function() {
                         else break;
                     }
                     
-                    // 2. Expand Height (With Strict Lookahead Protection)
+                    // 2. 向下扩展高度 (Expand Height)
+                    // 关键保护：如果下一行的同列位置也是横向长条的一部分，
+                    // 为了保持那个长条的完整性，这里不要向下侵占。
                     let h = 1;
                     check_h: while (r + h < rows) {
                         const rowOffset = (r + h) * cols;
                         
-                        // PROTECTION: If next row is wider than current w, STOP.
-                        // We do not want to vertically merge into a longer horizontal strip.
+                        // [Lookahead Protection]
+                        // 检查下一行紧邻右侧的格子是否也是有效且未访问的？
+                        // 如果是，说明下一行可能有一个更长的横条等待生成，不要截断它。
                         if (c + w < cols) {
                             const rightNeighbor = rowOffset + (c + w);
                             if (grid[rightNeighbor] === 1 && visited[rightNeighbor] === 0) {
-                                break check_h;
+                                break check_h; // 停止向下扩展
                             }
                         }
                         
-                        // Standard Check
+                        // 标准检查：当前行的 [c, c+w] 范围内必须全都是有效格子
                         for (let k = 0; k < w; k++) {
                             const checkIdx = rowOffset + (c + k);
                             if (grid[checkIdx] === 0 || visited[checkIdx] === 1) break check_h;
@@ -209,8 +263,9 @@ window.performMaskSampling = function() {
                     finalH = h;
                 } 
                 else {
-                    // --- FORCE VERTICAL STRATEGY ---
-                    // 1. Find Max Height
+                    // === 策略 B: 强制纵向优先 (Vertical First) ===
+                    
+                    // 1. 尽可能向下延伸 (Find Max Height)
                     let h = 1;
                     while (r + h < rows) {
                         const nextIdx = (r + h) * cols + c;
@@ -218,10 +273,12 @@ window.performMaskSampling = function() {
                         else break;
                     }
                     
-                    // 2. Expand Width (With Strict Lookahead Protection)
+                    // 2. 向右扩展宽度 (Expand Width)
                     let w = 1;
                     check_w: while (c + w < cols) {
-                        // PROTECTION: If next col is taller than current h, STOP.
+                        // [Lookahead Protection]
+                        // 检查下一列紧邻下方的格子。如果它是有效且未访问的，
+                        // 说明右侧可能有一个更长的竖条，不要向右侵占截断它。
                         if (r + h < rows) {
                             const bottomNeighbor = (r + h) * cols + (c + w);
                             if (grid[bottomNeighbor] === 1 && visited[bottomNeighbor] === 0) {
@@ -229,7 +286,7 @@ window.performMaskSampling = function() {
                             }
                         }
                         
-                        // Standard Check
+                        // 标准检查
                         for (let k = 0; k < h; k++) {
                             const checkIdx = (r + k) * cols + (c + w);
                             if (grid[checkIdx] === 0 || visited[checkIdx] === 1) break check_w;
@@ -240,7 +297,7 @@ window.performMaskSampling = function() {
                     finalH = h;
                 }
                 
-                // Mark Visited
+                // 标记已访问
                 for (let i = 0; i < finalH; i++) {
                     const rowOffset = (r + i) * cols + c;
                     for (let j = 0; j < finalW; j++) {
@@ -248,7 +305,7 @@ window.performMaskSampling = function() {
                     }
                 }
                 
-                // Output
+                // 计算实际像素坐标并应用 DPI 缩放
                 const startX = Math.floor(c * GRID_W * logicScale);
                 const startY = Math.floor(r * GRID_H * logicScale);
                 const endX = Math.floor((c + finalW) * GRID_W * logicScale);
@@ -263,7 +320,16 @@ window.performMaskSampling = function() {
             }
         }
         
-        const jsonStr = JSON.stringify(rects);
+        // --- 5. 数据回传 ---
+        // 将结果序列化为 JSON
+        // 发送给 Python Bridge (py_api.receive_render_mask)
+        const jsonStr = JSON.stringify({
+            rects: rects,
+            width: width,
+            height: height
+        });
+        
+        // 简单的去重机制：如果和上一帧数据一样，就不发了，节省 IPC 带宽
         if (jsonStr !== window.lastMaskJson) {
             window.lastMaskJson = jsonStr;
             if (window.py_api && window.py_api.receive_render_mask) {

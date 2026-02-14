@@ -1,56 +1,119 @@
+"""
+EmoteWidget 插件系统模块。
+
+本模块实现了 EmoteWidget 的插件扩展机制。
+插件允许开发者在不修改 SDK 核心代码的情况下，为组件添加新的功能（如聊天机器人集成、行为等）。
+
+架构组成:
+    1. **PluginAccessor**: 一个方便的容器类，提供点号访问语法 (widget.plugins.my_plugin)。
+    2. **PluginLoaderWorker**: 一个独立的后台线程 Worker，负责扫描和加载插件模块，避免阻塞 UI 主线程。
+"""
+
 import sys
 import os
 import importlib
 import logging
 from PySide6.QtCore import QObject, Signal, Slot
-from typing import Dict, List, ValuesView
+from typing import Dict, List, ValuesView, Optional
 from emote_widget.utils.logger import plugin_logger as logger
 from .plugin_interface import IEmotePlugin
 
 class PluginAccessor:
-    """提供类似 widget.plugins.pluginname 的访问方式"""
+    """
+    [插件访问器] 用于存储和访问已加载的插件实例。
+    
+    设计目的:
+        提供一种直观的语法糖，允许用户通过 `widget.plugins.plugin_name` 的方式访问插件。
+        这比 `get_plugin("plugin_name")` 更符合 Pythonic 风格。
+    """
     def __init__(self) -> None:
         self._plugins: Dict[str, IEmotePlugin] = {}
 
     def register(self, plugin: IEmotePlugin) -> None:
+        """
+        注册一个插件实例。
+        
+        Args:
+            plugin (IEmotePlugin): 已初始化的插件对象。
+        """
         name = plugin.get_name()
         if not name.isidentifier():
-            logger.error(f"插件名无效: {name}")
+            logger.error(f"插件名无效: '{name}'。必须是有效的 Python 标识符。")
             return
         self._plugins[name] = plugin
 
-    def get(self, name: str) -> IEmotePlugin | None:
+    def get(self, name: str) -> Optional[IEmotePlugin]:
+        """
+        获取指定名称的插件。
+        
+        Returns:
+            Optional[IEmotePlugin]: 插件实例，若不存在则返回 None。
+        """
         return self._plugins.get(name)
 
     def get_all(self) -> ValuesView[IEmotePlugin]:
+        """获取所有已加载的插件。"""
         return self._plugins.values()
     
     def cleanup_all(self) -> None:
+        """调用所有插件的 cleanup 方法。"""
         for p in self._plugins.values():
-            try: p.cleanup()
-            except: pass
+            try: 
+                p.cleanup()
+            except Exception as e:
+                logger.error(f"插件 {p.get_name()} 清理失败: {e}")
     
     def __getattr__(self, name: str) -> IEmotePlugin:
+        """
+        [黑魔法] 动态属性访问。
+        
+        允许 `plugins.debug` 访问名为 "debug" 的插件。
+        如果插件不存在，抛出 AttributeError。
+        """
         plugin = self.get(name)
         if plugin is None:
             raise AttributeError(f"未找到插件: '{name}'")
         return plugin
 
 class PluginLoaderWorker(QObject):
-    """独立的插件加载逻辑"""
+    """
+    [插件加载器] 负责在后台线程中扫描和实例化插件。
+    
+    职责:
+        1. 扫描指定目录下的 .py 文件和包目录。
+        2. 动态 import 模块。
+        3. 查找模块中继承自 `IEmotePlugin` 的类并实例化。
+        4. 通过信号汇报加载进度和日志。
+    """
+    
+    # 信号定义
     progress_updated = Signal(float, str)
+    """加载进度信号: (progress 0.0~1.0, current_task_description)"""
+    
     log_message = Signal(str, bool)
+    """日志信号: (message, is_error)"""
+    
     finished = Signal(list)
+    """完成信号: (loaded_instances: List[IEmotePlugin])"""
 
     def __init__(self, plugin_dir: str) -> None:
+        """
+        Args:
+            plugin_dir (str): 插件根目录的绝对路径。
+        """
         super().__init__()
         self._modules_to_load: List[str] = []
         self._plugin_dir: str = plugin_dir
 
     def scan_for_plugin_modules(self) -> None:
+        """
+        [预处理] 扫描插件目录，生成待加载模块列表。
+        此步骤通常在主线程执行，因为它很快且只涉及文件系统枚举。
+        """
+        # 将插件目录加入 sys.path，以便可以直接 import 其中的模块
         if self._plugin_dir not in sys.path:
             sys.path.insert(0, self._plugin_dir)
-            logger.debug(f"已将插件目录加入 sys.path")
+            logger.debug(f"已将插件目录加入 sys.path: {self._plugin_dir}")
 
         if not os.path.exists(self._plugin_dir):
             logger.error(f"❌ 插件目录不存在! 请检查路径: {self._plugin_dir}")
@@ -65,37 +128,28 @@ class PluginLoaderWorker(QObject):
                 is_file = os.path.isfile(filepath)
                 is_dir = os.path.isdir(filepath)
 
-                # Case A: 单文件插件
+                # Case A: 单文件插件 (plugin.py)
                 if is_file and filename.endswith(".py"):
-                    if filename.startswith("__"):
-                        logger.debug(f"  [忽略] 系统/接口文件: {filename}")
+                    if filename.startswith("__"): # 忽略 __init__.py
                         continue
-                    module_name = filename[:-3]
+                    module_name = filename[:-3] # 去掉 .py 后缀
                     logger.info(f"  [命中] 单文件插件: {module_name}")
 
-                # Case B: 包插件 (文件夹)
+                # Case B: 包插件 (plugin_folder/)
                 elif is_dir:
                     if filename.startswith("__") or filename.startswith("."):
-                        logger.debug(f"  [忽略] 隐藏目录: {filename}")
                         continue
                     
                     init_path = os.path.join(filepath, "__init__.py")
-                    has_init = os.path.exists(init_path)
-                    
-                    if has_init:
+                    if os.path.exists(init_path):
                         module_name = filename
                         logger.info(f"  [命中] 包插件: {module_name} (包含 __init__.py)")
                     else:
                         logger.warning(f"  [跳过] 文件夹 '{filename}' 缺少 __init__.py，无法作为包加载")
-                else:
-                    logger.debug(f"  [忽略] 未知类型: {filename}")
                 
-                # 加入列表
-                if module_name:
-                    if module_name not in self._modules_to_load:
-                        self._modules_to_load.append(module_name)
-                    else:
-                        logger.warning(f"  [重复] 插件 '{module_name}' 已在列表中")
+                # 加入待加载列表 (去重)
+                if module_name and module_name not in self._modules_to_load:
+                    self._modules_to_load.append(module_name)
 
             logger.info(f"扫描结束，待加载模块列表: {self._modules_to_load}")
         except Exception as e:
@@ -104,6 +158,10 @@ class PluginLoaderWorker(QObject):
 
     @Slot()
     def run_loading(self) -> None:
+        """
+        [后台任务] 执行具体的 import 和实例化操作。
+        此方法应在 QThread 中执行，以免阻塞主线程 UI。
+        """
         total = len(self._modules_to_load)
         loaded_instances: List[IEmotePlugin] = []
         
@@ -114,28 +172,36 @@ class PluginLoaderWorker(QObject):
         for i, mod_name in enumerate(self._modules_to_load):
             self.progress_updated.emit((i+1)/total, f"正在加载: {mod_name}")
             try:
+                # 动态导入模块
                 module = importlib.import_module(mod_name)
 
                 found_in_module = False
+                # 遍历模块中的所有属性，寻找 IEmotePlugin 的子类
                 for item_name in dir(module):
                     item = getattr(module, item_name)
-                    if isinstance(item, type):           
+                    if isinstance(item, type): # 必须是类定义          
                         is_sub = issubclass(item, IEmotePlugin)
-                        is_self = item is IEmotePlugin
-                        logger.info(f"  发现类 '{item_name}': 继承检测={is_sub}, 是否基类本身={is_self}")
+                        is_self = item is IEmotePlugin # 排除接口类本身
+                        
                         if is_sub and not is_self:
+                            logger.info(f"  发现插件类 '{item_name}'")
+                            # 实例化插件
                             instance = item()
-                            # 为插件创建专属logger
+                            # 自动注入专属 Logger，方便插件开发者调试
                             instance.logger = logging.getLogger(f"EmoteWidget.Plugins.{instance.get_name()}")
+                            
                             loaded_instances.append(instance)
                             self.log_message.emit(f"已加载: {instance.get_name()}", False)
                             found_in_module = True
+                            # 每个模块通常只包含一个主要插件类，找到后继续下一个模块?
+                            # 暂时不 break，允许一个模块包含多个插件类。
                 
                 if not found_in_module:
-                    logger.warning(f"模块 '{mod_name}' 中未发现有效的 IEmotePlugin 子类。请检查 __init__.py 是否暴露了该类。")
+                    logger.warning(f"模块 '{mod_name}' 中未发现有效的 IEmotePlugin 子类。")
 
             except Exception as e:
                 self.log_message.emit(f"加载失败 {mod_name}: {e}", True)
                 logger.error(f"插件加载错误 {mod_name}: {e}", exc_info=True)
                 
+        # 加载完成，返回实例列表
         self.finished.emit(loaded_instances)
