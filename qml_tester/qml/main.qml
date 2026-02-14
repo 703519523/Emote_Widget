@@ -20,6 +20,11 @@ ApplicationWindow {
     // 当前选中的标签页索引
     property int currentTabIndex: 0
     
+    Component.onCompleted: {
+        var res = EmoteBackend.api.list_available_resources()
+        controlPanel.resourceList = res
+    }
+
     // 监听 EmoteBackend 信号
     Connections {
         target: EmoteBackend
@@ -29,6 +34,14 @@ ApplicationWindow {
             controlPanel.loadModelBtn.enabled = true
             controlPanel.statusText.text = "模型已加载 (动作数: " + timelines.length + ")"
             controlPanel.motionList = timelines
+            
+            // 请求差分动画列表
+            EmoteBackend.requestDiffTimelines()
+        }
+        
+        function onDiffTimelinesReceived(timelines) {
+            console.log("QML: 收到差分动画列表: ", timelines.length)
+            controlPanel.diffTimelineList = timelines
         }
         
         function onLoadFinished() {
@@ -37,6 +50,10 @@ ApplicationWindow {
         
         function onCharacterClicked() {
             console.log("QML: 角色被点击")
+        }
+
+        function onCharacterHovered() {
+            console.log("QML: 角色被悬停")
         }
     }
     
@@ -51,25 +68,35 @@ ApplicationWindow {
             width: Style.sidebarWidth
             height: parent.height
             
-            // 绑定按钮事件到 EmoteBackend (使用新增的 Slot)
-            onLoadModelClicked: EmoteBackend.loadModel("chara.psb")
-            onPlayMotionClicked: (name) => EmoteBackend.playMotion(name)
-            onPlayVoiceClicked: (path) => EmoteBackend.playVoice(path)
-            onStopMotionClicked: EmoteBackend.stopMotion()
+            // 绑定按钮事件到 EmoteBackend.api (Controller)
+            onLoadModelClicked: (name) => EmoteBackend.api.load_model(name)
+            onApplyBackgroundClicked: (path) => EmoteBackend.api.set_background_image(path)
+            onAutoCenterClicked: EmoteBackend.api.auto_center()
             
-            onScaleChanged: (val) => EmoteBackend.setScale(val)
-            onRotationChanged: (val) => EmoteBackend.setRotation(val)
-            onPositionChanged: (x, y) => EmoteBackend.setPosition(x, y)
+            onPlayMotionClicked: (name) => EmoteBackend.api.play(name)
+            onPlayVoiceClicked: (path) => EmoteBackend.api.start_lip_sync_from_file(path)
+            onStopMotionClicked: EmoteBackend.api.stop_all_timelines()
+            onDiffTimelineClicked: (slot, name) => EmoteBackend.api.set_diff_timeline(slot, name)
             
-            onAlphaChanged: (val) => EmoteBackend.setAlpha(val)
-            onGrayscaleChanged: (val) => EmoteBackend.setGrayscale(val)
-            onRenderQualityChanged: (mode) => EmoteBackend.setRenderQuality(mode)
+            onShowDialogClicked: (text, duration, theme) => EmoteBackend.api.show_dialog(text, duration, theme)
             
-            onPhysicsChanged: (h, p, b) => EmoteBackend.setPhysics(h, p, b)
-            onWindChanged: (val) => EmoteBackend.setWind(val)
+            onScaleChanged: (val) => EmoteBackend.api.set_scale(val)
+            onRotationChanged: (val) => EmoteBackend.api.set_rotation(val)
+            onPositionChanged: (x, y) => EmoteBackend.api.set_coord(x, y)
             
-            onInteractionChanged: (d, z, g) => EmoteBackend.setInteraction(d, z, g)
-            onResetClicked: EmoteBackend.reset()
+            onAlphaChanged: (val) => EmoteBackend.api.set_global_alpha(val)
+            onGrayscaleChanged: (val) => EmoteBackend.api.set_grayscale(val)
+            onRenderQualityChanged: (mode) => EmoteBackend.api.set_render_quality(mode)
+            
+            onPhysicsChanged: (h, p, b) => EmoteBackend.api.set_physics_scale(h, p, b)
+            onWindChanged: (val) => EmoteBackend.api.set_wind(val)
+            
+            onInteractionChanged: (d, z, g) => {
+                EmoteBackend.api.enable_drag(d)
+                EmoteBackend.api.enable_zoom(z)
+                EmoteBackend.api.enable_gaze_control(g)
+            }
+            onResetClicked: EmoteBackend.api.animation_reset(1000)
         }
         
         // 右侧主内容区域

@@ -28,6 +28,13 @@ def main():
     # 3. 创建并设置 EmoteWidgetQml 实例
     # 注入插件路径（如果有的话）
     backend = EmoteWidgetQml()
+    
+    # 注册项目根目录资源
+    import os
+    cwd = os.getcwd()
+    backend.controller.add_resource_path('models', os.path.join(cwd, 'models'))
+    backend.controller.add_resource_path('backgrounds', os.path.join(cwd, 'backgrounds'))
+    
     engine.rootContext().setContextProperty("EmoteBackend", backend)
     
     # 4. 设置 QML 导入路径

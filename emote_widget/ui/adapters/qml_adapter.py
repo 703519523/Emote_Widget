@@ -1,5 +1,7 @@
-from PySide6.QtCore import QObject, Qt, QMetaObject, Q_ARG
-from PySide6.QtQuick import QQuickWindow
+from typing import Optional, cast, List
+from PySide6.QtCore import QObject, Qt, QMetaObject, Q_ARG, QRect
+from PySide6.QtGui import QRegion
+from PySide6.QtQuick import QQuickItem
 
 # 引入接口和日志
 from emote_widget.core.adapter_interface import IViewAdapter
@@ -8,7 +10,7 @@ from emote_widget.utils.logger import adapter_logger as logger
 class QmlAdapter(IViewAdapter):
     """QML WebEngineView 的适配器实现。"""
     
-    def __init__(self, qml_item: QObject = None):
+    def __init__(self, qml_item: Optional[QObject] = None):
         self._item = qml_item
         if self._item:
             self._item.setProperty("backgroundColor", "transparent")
@@ -27,7 +29,7 @@ class QmlAdapter(IViewAdapter):
         logger.info(f"QmlAdapter: View 已绑定: {self._item}")
 
     @property
-    def bridge_object(self) -> QObject:
+    def bridge_object(self) -> Optional[QObject]:
         """提供对bridge对象的访问。"""
         return self._bridge_object
 
@@ -42,7 +44,7 @@ class QmlAdapter(IViewAdapter):
         try:
             QMetaObject.invokeMethod(
                 self._item, 
-                "runJavaScript", 
+                b"runJavaScript", 
                 Qt.ConnectionType.DirectConnection,
                 Q_ARG(str, script)
             )
@@ -63,7 +65,8 @@ class QmlAdapter(IViewAdapter):
         if not self._item:
             return
 
-        window = self._item.window() 
+        quick_item = cast(QQuickItem, self._item)
+        window = quick_item.window()
         
         if not window:
             logger.warning("QML Adapter: 无法获取顶层窗口，透明设置失败。")
@@ -82,5 +85,25 @@ class QmlAdapter(IViewAdapter):
         if enable:
             logger.warning("QML Adapter: set_mouse_pass_through 尚未完全实现，请在 QML 侧配合处理。")
     
-    def get_ui_object(self) -> QObject:
+    def set_render_mask(self, rects: List[List[int]]) -> None:
+        """设置QML窗口的遮罩。"""
+        if not self._item:
+            return
+        
+        quick_item = cast(QQuickItem, self._item)
+        window = quick_item.window()
+        if not window:
+            return
+
+        if not rects:
+            window.setMask(QRegion())
+            return
+            
+        region = QRegion()
+        for x, y, w, h in rects:
+            region += QRect(int(x), int(y), int(w), int(h)).adjusted(-2, -2, 2, 2)
+        
+        window.setMask(region)
+
+    def get_ui_object(self) -> Optional[QObject]:
         return self._item

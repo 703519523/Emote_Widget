@@ -1,5 +1,6 @@
 import os
-from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl, Qt
+from typing import Optional, Dict, Any
+from PySide6.QtCore import QObject, Signal, Slot, Property , Qt
 from emote_widget.core.controller import EmoteController
 from emote_widget.core.scheme_handler import EmoteSchemeHandler
 from emote_widget.core.resource_manager import ResourceManager
@@ -46,13 +47,16 @@ class EmoteWidgetQml(QObject):
     pluginsLoadFinished = Signal()
     characterClicked = Signal()
     characterHovered = Signal()
+    variablesReceived = Signal(list, arguments=['variables'])
+    diffTimelinesReceived = Signal(list, arguments=['timelines'])
+    markerPositionReceived = Signal(dict, arguments=['position'])
     
     # 属性变化信号
     targetViewChanged = Signal()
     modelSourceChanged = Signal()
     bridgeChanged = Signal()
 
-    def __init__(self, parent=None, plugin_path: str = None, config_override: dict = None):
+    def __init__(self, parent: Optional[QObject] = None, plugin_path: Optional[str] = None, config_override: Optional[Dict[str, Any]] = None):
         super().__init__(parent)
         self._relay = _SignalRelay(self)
         self.resources = ResourceManager()
@@ -68,11 +72,6 @@ class EmoteWidgetQml(QObject):
 
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         html_path = os.path.join(base_dir, 'web_frontend', 'pyside_webview.html')
-        url = QUrl.fromLocalFile(html_path)
-        # url.setScheme("emote") # Windows 上 fromLocalFile 会自动处理
-        # 我们可以用 replace 强制改为 emote 协议，但这里我们先保留 file 协议或者自定义处理
-        # 为了兼容 SchemeHandler，我们需要确保 QML 使用的是我们注册的 Scheme
-        # 这里只是生成一个路径字符串，真正的 URL 是在 QML 里赋值的
         self._main_page_url = f"emote:///{html_path.replace(os.sep, '/')}"
 
         # [架构重构] 提前初始化 Controller 和 Adapter
@@ -86,7 +85,7 @@ class EmoteWidgetQml(QObject):
         self.resources.register_cleanup_task(self.controller.cleanup)
 
         # 连接信号 (使用 QueuedConnection)
-        ct = Qt.QueuedConnection
+        ct = Qt.ConnectionType.QueuedConnection
         self.controller.load_finished.connect(self._relay.on_load_finished, type=ct)
         self.controller.player_ready.connect(self._relay.on_player_ready, type=ct)
         self.controller.plugins_load_finished.connect(self._relay.on_plugins_load_finished, type=ct)
@@ -94,31 +93,36 @@ class EmoteWidgetQml(QObject):
         self.controller.on_character_hovered.connect(self._relay.on_character_hovered, type=ct)
 
     @Property(QObject, notify=bridgeChanged)
-    def bridge(self) -> QObject:
+    def bridge(self) -> Optional[QObject]:
         """[只读] 暴露 Controller 内部的 Bridge 对象给 QML"""
-        if self.controller and hasattr(self.controller, '_bridge'):
-            return self.controller._bridge
+        # 使用 getattr 安全访问 _bridge，避免 pylance 报错
+        bridge = getattr(self.controller, '_bridge', None)
+        if self.controller and bridge:
+            return bridge
         return None
 
-    @Property(QObject, notify=targetViewChanged)
-    def targetView(self):
+    @Property(QObject, constant=True)
+    def api(self) -> QObject:
+        """[只读] 暴露 Controller 实例给 QML"""
+        return self.controller
+
+    def get_targetView(self) -> Optional[QObject]:
         return self._target_view
 
-    @targetView.setter
-    def targetView(self, item):
+    def set_targetView(self, item: Optional[QObject]):
         if self._target_view == item: return
         self._target_view = item
         self.targetViewChanged.emit()
         
         if item:
             self._attach_view(item)
+    
+    targetView = Property(QObject, get_targetView, set_targetView, notify=targetViewChanged)
 
-    @Property(str, notify=modelSourceChanged)
-    def modelSource(self):
+    def get_modelSource(self) -> str:
         return self._model_source
 
-    @modelSource.setter
-    def modelSource(self, path):
+    def set_modelSource(self, path: str):
         if self._model_source == path: return
         self._model_source = path
         self.modelSourceChanged.emit()
@@ -126,12 +130,14 @@ class EmoteWidgetQml(QObject):
         # 如果控制器已就绪，立即加载；否则等待初始化后加载
         if self.controller and self._page_loaded:
             self.controller.load_model(path)
+            
+    modelSource = Property(str, get_modelSource, set_modelSource, notify=modelSourceChanged)
 
     @Property(str, constant=True)
     def mainPageUrl(self):
         return self._main_page_url
 
-    def _attach_view(self, qml_item):
+    def _attach_view(self, qml_item: QObject):
         logger.info(f"EmoteWidgetQml: 绑定 View: {qml_item}")
         
         # 1. 更新 Adapter
@@ -150,7 +156,7 @@ class EmoteWidgetQml(QObject):
         # 注意：这里不需要再 emit bridgeChanged，因为 bridge 一直都在
 
     @Slot(QObject)
-    def registerWebChannel(self, channel_obj):
+    def registerWebChannel(self, channel_obj: QObject):
         """供 QML 调用，手动注册 WebChannel 对象"""
         if not channel_obj:
             logger.error("EmoteWidgetQml: 接收到的 WebChannel 对象为空")
@@ -158,7 +164,7 @@ class EmoteWidgetQml(QObject):
             
         try:
             # 获取 bridge 对象
-            bridge = self.controller._bridge
+            bridge = getattr(self.controller, '_bridge', None)
             if not bridge:
                 logger.error("EmoteWidgetQml: Bridge 尚未初始化")
                 return
@@ -173,9 +179,16 @@ class EmoteWidgetQml(QObject):
             
             # 必须设置 objectName，虽然 registerObject 第一个参数就是名字
             bridge.setObjectName("py_api")
-            channel_obj.registerObject("py_api", bridge)
             
-            logger.info("EmoteWidgetQml: Bridge 注册成功！")
+            # 使用 getattr 动态调用 registerObject 以避免 pylance 静态检查错误
+            # 因为 QObject 类型本身没有 registerObject 方法
+            register_func = getattr(channel_obj, "registerObject", None)
+            if callable(register_func):
+                register_func("py_api", bridge)
+                logger.info("EmoteWidgetQml: Bridge 注册成功！")
+            else:
+                logger.error("EmoteWidgetQml: WebChannel 对象缺少 registerObject 方法")
+
         except Exception as e:
             logger.error(f"EmoteWidgetQml: 注册 Bridge 失败: {e}")
 
@@ -193,101 +206,26 @@ class EmoteWidgetQml(QObject):
                 logger.info(f"EmoteWidgetQml: 页面就绪，执行延迟加载模型: {self._model_source}")
                 self.controller.load_model(self._model_source)
 
-    # --- QML 可调用 API ---
-
-    @Slot(str)
-    def loadModel(self, path: str):
-        """加载模型"""
-        if self.controller:
-            self.controller.load_model(path)
-
-    @Slot(str)
-    def playMotion(self, name: str):
-        """播放动作"""
-        if self.controller:
-            self.controller.play(name)
-
-    @Slot(str)
-    def playVoice(self, path: str):
-        """播放语音并同步口型"""
-        if self.controller:
-            self.controller.start_lip_sync_from_file(path)
-
-    @Slot()
-    def stopMotion(self):
-        """停止所有动作"""
-        if self.controller:
-            self.controller.stop_all_timelines()
-
     @Slot()
     def cleanup(self):
         self.resources.shutdown()
 
-    # --- 扩展 API (参考 test_qt.py) ---
-
-    @Slot(float)
-    def setScale(self, scale: float):
-        """设置缩放"""
-        if self.controller:
-            self.controller.set_scale(scale)
-
-    @Slot(float)
-    def setRotation(self, angle: float):
-        """设置旋转"""
-        if self.controller:
-            self.controller.set_rotation(angle)
-
-    @Slot(float, float)
-    def setPosition(self, x: float, y: float):
-        """设置位置"""
-        if self.controller:
-            self.controller.set_coord(x, y)
-
-    @Slot(float)
-    def setAlpha(self, alpha: float):
-        """设置透明度"""
-        if self.controller:
-            self.controller.set_global_alpha(alpha)
-
-    @Slot(float)
-    def setGrayscale(self, value: float):
-        """设置灰度"""
-        if self.controller:
-            self.controller.set_grayscale(value)
-
-    @Slot(float, float, float)
-    def setPhysics(self, hair: float, parts: float, bust: float):
-        """设置物理参数"""
-        if self.controller:
-            self.controller.set_physics_scale(hair, parts, bust)
-            
-    @Slot(float)
-    def setWind(self, strength: float):
-        """设置风力"""
-        if self.controller:
-            self.controller.set_wind(strength)
-
-    @Slot(bool, bool, bool)
-    def setInteraction(self, drag: bool, zoom: bool, gaze: bool):
-        """设置交互开关"""
-        if self.controller:
-            if drag: self.controller.enable_drag(True)
-            else: self.controller.enable_drag(False)
-            
-            if zoom: self.controller.enable_zoom(True)
-            else: self.controller.enable_zoom(False)
-            
-            if gaze: self.controller.enable_gaze_control(True)
-            else: self.controller.enable_gaze_control(False)
+    # --- 异步查询 Wrapper (保留，因为 QML 无法直接传递 callback) ---
 
     @Slot()
-    def reset(self):
-        """重置状态"""
+    def requestVariables(self):
+        """请求变量列表 (异步)"""
         if self.controller:
-            self.controller.animation_reset(1000)
+            self.controller.get_variables(lambda vars: self.variablesReceived.emit(vars))
+
+    @Slot()
+    def requestDiffTimelines(self):
+        """请求差分动画列表 (异步)"""
+        if self.controller:
+            self.controller.get_diff_timelines(lambda timelines: self.diffTimelinesReceived.emit(timelines))
 
     @Slot(str)
-    def setRenderQuality(self, mode: str):
-        """设置渲染画质"""
+    def requestMarkerPosition(self, name: str):
+        """请求标记点位置 (异步)"""
         if self.controller:
-            self.controller.set_render_quality(mode)
+            self.controller.get_marker_position(name, lambda pos: self.markerPositionReceived.emit(pos if pos else {}))

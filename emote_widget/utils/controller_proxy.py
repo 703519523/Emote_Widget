@@ -3,7 +3,7 @@ from emote_widget.core.controller import EmoteController
 
 T = TypeVar('T', bound=EmoteController)
 
-class ControllerProxy(EmoteController):
+class ControllerProxy:
     """
     [安全代理]
     
@@ -36,8 +36,8 @@ class ControllerProxy(EmoteController):
     def __setattr__(self, name: str, value: Any):
         """禁止外部修改 Controller 的属性 (只读保护)"""
         # 通常 Controller 的状态应该通过方法调用来改变
-        if name.startswith('_'):
-             raise AttributeError(f"Access denied: Cannot set private attribute '{name}'.")
+        # if name.startswith('_'):
+        #      raise AttributeError(f"Access denied: Cannot set private attribute '{name}'.")
         
         # 转发设置给实现对象
         setattr(self._impl, name, value)

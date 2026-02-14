@@ -487,11 +487,20 @@ class TestMainWindow(QMainWindow):
         self.emote_view = EmoteWidget(self)
         main_layout.addWidget(self.emote_view, 2)
 
-        self.available_models = self._scan_for_resources(os.path.join('web_frontend', 'models'), ['.psb'])
-        self.available_backgrounds = self._scan_for_resources(os.path.join('web_frontend', 'backgrounds'), ['.png', '.jpg', '.jpeg', '.gif'])
-        self.available_dialog_themes = self._scan_for_resources(os.path.join('web_frontend', 'dialogs'), ['.html'])
-        self.available_dialog_themes = [os.path.splitext(theme)[0] for theme in self.available_dialog_themes]
-
+        # 使用新资源机制注册根目录下的资源文件夹
+        cwd = os.getcwd()
+        self.emote_view.controller.add_resource_path('models', os.path.join(cwd, 'models'))
+        self.emote_view.controller.add_resource_path('backgrounds', os.path.join(cwd, 'backgrounds'))
+        
+        # 获取可用资源列表
+        resources = self.emote_view.controller.list_available_resources()
+        self.available_models = list(resources['models'].keys())
+        self.available_backgrounds = list(resources['backgrounds'].keys())
+        
+        # 对话框主题特殊处理 (去掉 .html 后缀)
+        self.available_dialog_themes = [
+            os.path.splitext(f)[0] for f in resources['dialogs'].keys()
+        ]
 
         self.tabs = QTabWidget()
         self._create_all_control_tabs()
@@ -512,24 +521,6 @@ class TestMainWindow(QMainWindow):
     @Slot()
     def character_was_hovered(self):
         print("角色被悬停超过1秒")
-        
-    def _scan_for_resources(self, relative_dir, extensions):
-        """通用资源扫描函数。"""
-        resources_dir = os.path.join(os.path.dirname(__file__), relative_dir)
-        found_resources = []
-        if not os.path.exists(resources_dir):
-            print(f"警告: 资源目录 '{resources_dir}' 不存在。")
-            return []
-        
-        for root, _, files in os.walk(resources_dir):
-            for file in files:
-                if any(file.lower().endswith(ext) for ext in extensions):
-                    full_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(full_path, resources_dir)
-                    found_resources.append(relative_path.replace("\\", "/"))
-        
-        print(f"在 '{relative_dir}' 中扫描到 {len(found_resources)} 个资源: {found_resources}")
-        return found_resources
 
     def _create_all_control_tabs(self):
         """创建所有标签页并将控件组添加到其中。"""
@@ -595,12 +586,51 @@ class TestMainWindow(QMainWindow):
         btn_layout.addWidget(self.hide_btn)
         btn_layout.addWidget(self.show_btn)
 
+        mask_layout = QHBoxLayout()
+        self.mask_check = QCheckBox("启用组件遮罩 (穿透)")
+        self.mask_check.setToolTip("开启后，Widget将根据角色轮廓进行裁切。\n(已屏蔽对主窗口的无边框修改)")
+        self.mask_check.toggled.connect(self._on_mask_toggled)
+        
+        self.mask_monitor_check = QCheckBox("显示遮罩监视器")
+        self.mask_monitor_check.toggled.connect(self.emote_view.show_mask_monitor)
+        
+        mask_layout.addWidget(self.mask_check)
+        mask_layout.addWidget(self.mask_monitor_check)
+        
+        # Grid Size Controls
+        grid_layout = QHBoxLayout()
+        grid_layout.addWidget(QLabel("网格大小:"))
+        self.grid_w_spin = QSpinBox()
+        self.grid_w_spin.setRange(1, 100)
+        self.grid_w_spin.setValue(30)
+        self.grid_h_spin = QSpinBox()
+        self.grid_h_spin.setRange(1, 100)
+        self.grid_h_spin.setValue(30)
+        self.set_grid_btn = QPushButton("设置")
+        self.set_grid_btn.clicked.connect(self._set_mask_grid)
+        
+        grid_layout.addWidget(self.grid_w_spin)
+        grid_layout.addWidget(QLabel("x"))
+        grid_layout.addWidget(self.grid_h_spin)
+        grid_layout.addWidget(self.set_grid_btn)
+
         layout.addLayout(model_layout)
         layout.addLayout(bg_layout)
+        layout.addLayout(mask_layout)
+        layout.addLayout(grid_layout)
         layout.addWidget(self.center_btn)
         layout.addWidget(self.bg_color_btn)
         layout.addLayout(btn_layout)
         return group
+
+    def _on_mask_toggled(self, checked):
+        # 触发 Controller 的透明模式逻辑（开启JS采样），但底层 Window 修改已被拦截
+        self.emote_view.api.set_window_transparent(checked, click_through=checked)
+
+    def _set_mask_grid(self):
+        w = self.grid_w_spin.value()
+        h = self.grid_h_spin.value()
+        self.emote_view.controller.set_mask_grid_size(w, h)
 
     def _create_transform_controls(self):
         group = QGroupBox("2. 变换 (Transform)")

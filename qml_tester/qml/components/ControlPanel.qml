@@ -8,12 +8,32 @@ Rectangle {
     
     // --- 公共属性 ---
     property var motionList: []
+    property var diffTimelineList: []
+    property var resourceList: ({ "models": {}, "backgrounds": {}, "dialogs": {} })
     
+    property var modelNames: []
+    property var backgroundNames: []
+    property var dialogThemeNames: []
+    
+    onResourceListChanged: {
+        if (resourceList) {
+            modelNames = Object.keys(resourceList.models || {})
+            backgroundNames = Object.keys(resourceList.backgrounds || {})
+            dialogThemeNames = Object.keys(resourceList.dialogs || {})
+        }
+    }
+
     // --- 信号定义 ---
-    signal loadModelClicked()
+    signal loadModelClicked(string modelName)
+    signal applyBackgroundClicked(string bgName)
+    signal autoCenterClicked()
+    
     signal playMotionClicked(string motionName)
     signal playVoiceClicked(string voicePath)
     signal stopMotionClicked()
+    signal diffTimelineClicked(int slot, string motionName)
+    
+    signal showDialogClicked(string text, int duration, string theme)
     
     signal scaleChanged(real value)
     signal rotationChanged(real value)
@@ -105,12 +125,45 @@ Rectangle {
                     
                     ColumnLayout {
                         anchors.fill: parent
+                        
+                        Label { text: "模型:" }
+                        ComboBox {
+                            id: modelCombo
+                            Layout.fillWidth: true
+                            model: modelNames
+                        }
                         Button {
                             id: loadModelButton
-                            text: "重新加载模型"
+                            text: "加载模型"
                             Layout.fillWidth: true
-                            onClicked: controlPanel.loadModelClicked()
+                            onClicked: controlPanel.loadModelClicked(modelCombo.currentText)
                         }
+                        
+                        Label { text: "背景:" }
+                        ComboBox {
+                            id: bgCombo
+                            Layout.fillWidth: true
+                            model: backgroundNames
+                        }
+                        RowLayout {
+                            Button {
+                                text: "应用背景"
+                                Layout.fillWidth: true
+                                onClicked: controlPanel.applyBackgroundClicked(bgCombo.currentText)
+                            }
+                            Button {
+                                text: "清除背景"
+                                Layout.fillWidth: true
+                                onClicked: controlPanel.applyBackgroundClicked("")
+                            }
+                        }
+                        
+                        Button {
+                            text: "自动居中"
+                            Layout.fillWidth: true
+                            onClicked: controlPanel.autoCenterClicked()
+                        }
+
                         Button {
                             text: "重置所有状态"
                             Layout.fillWidth: true
@@ -161,6 +214,62 @@ Rectangle {
                             text: "播放测试语音"
                             Layout.fillWidth: true
                             onClicked: controlPanel.playVoiceClicked("voice.wav")
+                        }
+                        
+                        Label { text: "差分动画 (Slot 1):" }
+                        ComboBox {
+                            id: diffCombo
+                            Layout.fillWidth: true
+                            model: diffTimelineList
+                        }
+                        RowLayout {
+                            Button {
+                                text: "播放差分"
+                                Layout.fillWidth: true
+                                onClicked: controlPanel.diffTimelineClicked(1, diffCombo.currentText)
+                            }
+                            Button {
+                                text: "清除差分"
+                                Layout.fillWidth: true
+                                onClicked: controlPanel.diffTimelineClicked(1, "")
+                            }
+                        }
+                    }
+                }
+                
+                // 对话框
+                GroupBox {
+                    title: "对话框"
+                    Layout.fillWidth: true
+                    
+                    ColumnLayout {
+                        anchors.fill: parent
+                        
+                        TextField {
+                            id: dialogInput
+                            Layout.fillWidth: true
+                            text: "你好 QML!"
+                            placeholderText: "输入对话内容..."
+                        }
+                        
+                        Label { text: "主题:" }
+                        ComboBox {
+                            id: themeCombo
+                            Layout.fillWidth: true
+                            model: dialogThemeNames
+                        }
+                        
+                        Label { text: "时长: " + dialogDurationSlider.value.toFixed(0) + "ms" }
+                        Slider {
+                            id: dialogDurationSlider
+                            from: 1000; to: 10000; value: 3000
+                            Layout.fillWidth: true
+                        }
+                        
+                        Button {
+                            text: "显示对话框"
+                            Layout.fillWidth: true
+                            onClicked: controlPanel.showDialogClicked(dialogInput.text, dialogDurationSlider.value, themeCombo.currentText)
                         }
                     }
                 }

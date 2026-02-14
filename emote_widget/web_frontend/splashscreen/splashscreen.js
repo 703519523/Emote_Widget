@@ -1,3 +1,39 @@
+// Helper to inject splash screen HTML if missing
+(function() {
+    const injectSplash = () => {
+        if (!document.getElementById('splash-screen')) {
+            const splashHTML = `
+            <div id="splash-screen">
+                <div class="splash-content">
+                    <h1 class="splash-title">EmoteWidget <span id="splash-version"></span></h1>
+                    <div class="progress-container">
+                        <div class="progress-label" id="main-progress-label">初始化...</div>
+                        <div class="progress-bar-background">
+                            <div class="progress-bar-fill" id="main-progress-bar"></div>
+                        </div>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-label" id="plugin-progress-label">等待插件...</div>
+                        <div class="progress-bar-background">
+                            <div class="progress-bar-fill" id="plugin-progress-bar"></div>
+                        </div>
+                    </div>
+                    <div id="error-console">
+                        <div class="error-header">加载日志:</div>
+                    </div>
+                </div>
+            </div>`;
+            document.body.insertAdjacentHTML('afterbegin', splashHTML);
+        }
+    };
+
+    if (document.body) {
+        injectSplash();
+    } else {
+        document.addEventListener('DOMContentLoaded', injectSplash);
+    }
+})();
+
 const SplashScreenAPI = {
     setVersion(version) {
         requestAnimationFrame(() => {

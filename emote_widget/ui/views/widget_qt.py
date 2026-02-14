@@ -12,6 +12,7 @@ from emote_widget.core.scheme_handler import EmoteSchemeHandler
 from emote_widget.core.resource_manager import ResourceManager
 from emote_widget.ui.adapters.qt_adapter import WidgetAdapter
 from emote_widget.ui.common.lip_sync_monitor_widget import LipSyncMonitorWidget
+from emote_widget.ui.common.mask_monitor_widget import MaskMonitorWidget
 
 class WindowProtocol(Protocol):
     """定义窗口对象需要实现的接口"""
@@ -84,9 +85,10 @@ class EmoteWidget(QWebEngineView):
         self.setUrl(url)
 
         self._monitor_widget: LipSyncMonitorWidget | None = None
+        self._mask_monitor_widget: MaskMonitorWidget | None = None
 
     @property
-    def api(self) -> EmoteController:
+    def api(self) -> ControllerProxy:
         """
         获取核心控制器实例。
         所有对模型的控制 (load_model, play, set_scale 等) 都应通过此属性调用。
@@ -143,6 +145,25 @@ class EmoteWidget(QWebEngineView):
             self.show_lip_sync_monitor(False)
         # show_lip_sync_monitor会确保_monitor_widget不为None
         return cast(LipSyncMonitorWidget, self._monitor_widget)
+
+    def show_mask_monitor(self, show: bool = True) -> None:
+        """
+        显示/隐藏遮罩监视器窗口 (Qt Widget 特有功能)
+        
+        Args:
+            show (bool): 是否显示监视器窗口，默认为True
+        """
+        if not self._mask_monitor_widget:
+            self._mask_monitor_widget = MaskMonitorWidget()
+            # 使用适配器包装QWidget使其符合WindowProtocol
+            self.resources.register_window(WindowAdapter(self._mask_monitor_widget))
+            # 连接 Controller 的数据信号 -> Monitor UI
+            self.controller.render_mask_visual_data.connect(self._mask_monitor_widget.update_mask)
+        
+        if show:
+            self._mask_monitor_widget.show()
+        else:
+            self._mask_monitor_widget.hide()
 
     def closeEvent(self, event: Any) -> None:
         """窗口关闭事件，统一清理资源"""

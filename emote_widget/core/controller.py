@@ -4,7 +4,7 @@ import time
 import uuid
 import queue
 import threading
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Dict, List, Union, cast, Tuple
 import numpy as np
 from numpy.typing import NDArray
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QTimer
@@ -21,7 +21,10 @@ from emote_widget.core.python_api_bridge import PythonApiBridge
 
 import emote_widget.utils.bound_params as bound_params
 from emote_widget.utils.audio_utils import stream_audio_file
-from emote_widget.utils.paths import resolve_resource_url
+from emote_widget.utils.paths import resolve_resource_url, add_resource_directory
+# Access private members to implement strict list_available_resources logic
+from emote_widget.utils.paths import RESOURCE_SEARCH_PATHS, WEB_FRONTEND_ROOT
+
 from emote_widget.utils.logger import emote_widget_logger as logger
 
 class EmoteController(QObject):
@@ -60,14 +63,17 @@ class EmoteController(QObject):
     lip_sync_debug_data = Signal(dict)
     """音频同步的调试信息，用于给外界组件接收"""
 
-    def __init__(self, view_adapter: IViewAdapter, plugin_dir: str | None = None, config_override: dict[str, Any] | None = None, bound_config_override: str | None = None) -> None:
+    render_mask_visual_data = Signal(list, int, int)
+    """渲染遮罩调试数据: (rects, canvas_width, canvas_height)"""
+
+    def __init__(self, view_adapter: IViewAdapter, plugin_dir: Optional[str] = None, config_override: Optional[Dict[str, Any]] = None, bound_config_override: Optional[str] = None) -> None:
         """初始化 EmoteWidgetController 组件。"""
 
         super().__init__()
 
         self.view_adapter: IViewAdapter = view_adapter
 
-        self.config: dict[str, Any] = json.loads(json.dumps(DEFAULT_CONFIG))
+        self.config: Dict[str, Any] = json.loads(json.dumps(DEFAULT_CONFIG))
         # 如果用户提供了覆盖配置，则进行合并
         if config_override:
             for key, value in config_override.items():
@@ -79,8 +85,8 @@ class EmoteController(QObject):
             bound_params.load_config(bound_config_override)
 
         self.js_player_name: str = "emotePlayer" 
-        self._command_queue: list[str] = []  # 指令队列
-        self._pending_queries: dict[str, Callable[[Any], None]] = {}  # 回调挂号表
+        self._command_queue: List[str] = []  # 指令队列
+        self._pending_queries: Dict[str, Callable[[Any], None]] = {}  # 回调挂号表
 
         # 插件系统
         self.plugin_dir: str
@@ -98,30 +104,30 @@ class EmoteController(QObject):
         self._plugin_loader_worker.finished.connect(self._on_plugins_load_finished)
         self._plugin_loader_thread.started.connect(self._plugin_loader_worker.run_loading)
 
-        self._splash_start_time = 0
+        self._splash_start_time: float = 0.0
 
         # 启动加载
-        self._is_splash_dismissed = False
-        self._plugins_are_ready = False
-        self._player_is_ready = False
+        self._is_splash_dismissed: bool = False
+        self._plugins_are_ready: bool = False
+        self._player_is_ready: bool = False
 
         # 音频同步
-        self._lip_sync_thread = None
-        self._last_mouth_ratio = 0.0
-        self._streamer_stop_event = threading.Event()
+        self._lip_sync_thread: Optional[StreamLipSyncThread] = None
+        self._last_mouth_ratio: float = 0.0
+        self._streamer_stop_event: threading.Event = threading.Event()
 
-        self.current_model_filename = None # 当前加载的模型文件名
+        self.current_model_filename: Optional[str] = None # 当前加载的模型文件名
         
         # --- 透明模式状态管理 ---
-        self._is_page_transparent = False
-        self._is_window_transparent = False
-        self._cached_window_flags = None
-        self._cached_bg_color: dict[str, int | float] = {"r": 255, "g": 255, "b": 255, "a": 1.0}
+        self._is_window_transparent: bool = False
+        self._is_click_through_enabled: bool = False
+        self._cached_bg_color: Dict[str, Union[int, float]] = {"r": 255, "g": 255, "b": 255, "a": 1.0}
 
-        self.variable_map = bound_params.get_default_map()
+        self.variable_map: bound_params.BoundMap = bound_params.get_default_map()
+        self.mouth_param_info: Optional[bound_params.BoundMapItem] = None
 
         # --- 设置通信 ---
-        self._bridge = PythonApiBridge(self)
+        self._bridge: PythonApiBridge = PythonApiBridge(self)
         
         # --- 连接内部信号 ---
         self._bridge.on_character_clicked_signal.connect(self.on_character_clicked)
@@ -129,11 +135,43 @@ class EmoteController(QObject):
         
         self._bridge.player_ready_signal.connect(self._on_player_ready_handler)
         self._bridge.query_result_signal.connect(self._handle_query_result)
+        self._bridge.render_mask_updated_signal.connect(self._handle_render_mask_update)
 
         self.view_adapter.register_python_bridge(self._bridge, "py_api")
 
+    @Slot(str)
+    def _handle_render_mask_update(self, mask_json: str) -> None:
+        """处理来自 JS 的渲染掩码数据，并将其传递给 View Adapter 以应用窗口遮罩。"""
+        if not self._is_window_transparent or not self._is_click_through_enabled:
+            return # 非透明或非穿透模式不需要应用 Mask
+            
+        try:
+            payload: Any = json.loads(mask_json)
+            
+            rects: List[Any] = []
+            width: int = 0
+            height: int = 0
+
+            # 兼容旧格式（纯列表）和新格式（对象）
+            if isinstance(payload, list):
+                rects = cast(List[Any], payload)
+            elif isinstance(payload, dict):
+                payload_dict = cast(Dict[str, Any], payload)
+                rects = payload_dict.get('rects', [])
+                width = int(payload_dict.get('width', 0))
+                height = int(payload_dict.get('height', 0))
+                
+            # 发射用于 MaskMonitorWidget 的可视化数据
+            self.render_mask_visual_data.emit(rects, width, height)
+            
+            if hasattr(self.view_adapter, 'set_render_mask'):
+                self.view_adapter.set_render_mask(rects)
+                
+        except Exception as e:
+            logger.error(f"处理渲染掩码失败: {e}")
+
     @Slot(str,str)
-    def _handle_query_result(self, request_id: str, result_json: str | None):
+    def _handle_query_result(self, request_id: str, result_json: Optional[str]) -> None:
         """处理从 Bridge 回来的数据"""
         # 1. 检查是否存在挂号
         if request_id in self._pending_queries:
@@ -151,7 +189,7 @@ class EmoteController(QObject):
             # 可能是超时了或者 ID 错误，记录但不处理
             logger.debug(f"收到未知 request_id 的查询结果: {request_id[:8]}...")
 
-    def _safe_run(self, js_code: str):
+    def _safe_run(self, js_code: str) -> None:
         """执行无返回值的 JS 代码 (支持队列缓存)"""
         if not self._player_is_ready:
             self._command_queue.append(js_code)
@@ -167,7 +205,7 @@ class EmoteController(QObject):
         """
         self.view_adapter.run_javascript(full_script)
 
-    def _safe_query(self, expression: str, callback: Callable[[Any], None] | None) -> None:
+    def _safe_query(self, expression: str, callback: Optional[Callable[[Any], None]]) -> None:
         """
         执行有返回值的 JS 查询。
         
@@ -214,7 +252,7 @@ class EmoteController(QObject):
 
     # --- 内部事件处理器 ---
     
-    def on_page_load_finished(self, ok: bool):
+    def on_page_load_finished(self, ok: bool) -> None:
         logger.debug(f"--> _on_page_load_finished Signal Received. Status OK: {ok}")
         if ok:
 
@@ -260,7 +298,7 @@ class EmoteController(QObject):
 
     # --- 辅助方法 ---
 
-    def _init_default_theme(self):
+    def _init_default_theme(self) -> None:
         """预加载默认对话框主题，防止后续报错"""
         default_theme_url = resolve_resource_url("default.html", "dialogs")
         if default_theme_url:
@@ -270,7 +308,7 @@ class EmoteController(QObject):
         else:
             logger.warning("默认对话框主题 default.html 未找到，可能导致对话框功能异常。")
 
-    def _check_if_all_ready(self):
+    def _check_if_all_ready(self) -> None:
         """
         检查所有并行加载任务是否都已完成。
         """
@@ -279,36 +317,36 @@ class EmoteController(QObject):
             self._update_splash_main_progress(1.0, "所有加载步骤完成！")
             self._dismiss_splash_screen()
 
-    def _update_splash_main_progress(self, progress: float, text: str):
+    def _update_splash_main_progress(self, progress: float, text: str) -> None:
         safe_text = json.dumps(text)
         self.view_adapter.run_javascript(f"SplashScreenAPI.updateMainProgress({progress}, {safe_text});")
 
-    def _update_splash_plugin_progress(self, progress: float, text: str):
+    def _update_splash_plugin_progress(self, progress: float, text: str) -> None:
         safe_text = json.dumps(text)
         self.view_adapter.run_javascript(f"SplashScreenAPI.updatePluginProgress({progress}, {safe_text});")
 
-    def _add_splash_log(self, message: str, is_error: bool = False):
+    def _add_splash_log(self, message: str, is_error: bool = False) -> None:
         safe_message = json.dumps(message)
         js_bool = "true" if is_error else "false"
         self.view_adapter.run_javascript(f"SplashScreenAPI.addLog({safe_message}, {js_bool});")
     
-    def _update_splash_version(self):
+    def _update_splash_version(self) -> None:
         safe_version = json.dumps(__version__)
         self.view_adapter.run_javascript(f"SplashScreenAPI.setVersion({safe_version});")
 
-    def _dismiss_splash_screen(self):
+    def _dismiss_splash_screen(self) -> None:
         if self._is_splash_dismissed: return
         self._is_splash_dismissed = True
         logger.info("所有加载步骤完成，正在隐藏启动画面...")
         self.view_adapter.run_javascript("setTimeout(() => { SplashScreenAPI.dismiss(); }, 500);")
 
-    def _proceed_to_model_loading_step(self):
+    def _proceed_to_model_loading_step(self) -> None:
         """
         在插件加载和最小显示时间都完成后，设置状态并检查是否可以关闭启动画面。
         """
         logger.info("插件流程已就绪。")
         self._update_splash_main_progress(0.8, "插件加载完毕。正在等待模型...")
-        self._update_splash_plugin_progress(1, "完成")
+        self._update_splash_plugin_progress(1.0, "完成")
         
         self._plugins_are_ready = True
         self._check_if_all_ready()
@@ -344,14 +382,15 @@ class EmoteController(QObject):
 
         self.get_variables(on_variables_received)
 
-    def find_param_by_usage(self, usage_tag: str) -> dict[str, Any] | None:
+    def find_param_by_usage(self, usage_tag: str) -> Optional[bound_params.BoundMapItem]:
         """根据特殊用途标签查找参数的完整信息。"""
         for param_info in self.variable_map.values():
-            if usage_tag in param_info.get("special_usage", []):
+            special_usage = param_info.get("special_usage", [])
+            if isinstance(special_usage, list) and usage_tag in special_usage:
                 return param_info
         return None
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """
         释放 Controller 持有的所有资源。
         停止线程、停止音频流、卸载插件。
@@ -375,23 +414,34 @@ class EmoteController(QObject):
     
     # --- 槽函数 ---
     def _on_mouth_ratio_update(self, open_ratio: float) -> None:
+        if not self.mouth_param_info:
+            return
+
         lip_sync_config = self.config['lip_sync']
-        final_ratio: float = (open_ratio ** lip_sync_config['mouth_ratio_curve']) * lip_sync_config['mouth_ratio_oversaturation']
+        curve = float(lip_sync_config['mouth_ratio_curve'])
+        oversaturation = float(lip_sync_config['mouth_ratio_oversaturation'])
+
+        final_ratio: float = (open_ratio ** curve) * oversaturation
         final_ratio = max(0.0, min(final_ratio, 1.0))
 
         param_info = self.mouth_param_info
-        param_range = param_info['range'][1] - param_info['range'][0]
-        target_value = param_info['range'][0] + final_ratio * param_range
+        param_range = cast(Tuple[float, float], param_info['range'])
+        range_span = param_range[1] - param_range[0]
+        target_value = param_range[0] + final_ratio * range_span
         
-        self.set_variable(param_info['name'], target_value, duration_ms=lip_sync_config['set_variable_duration_ms'])
+        duration = int(lip_sync_config['set_variable_duration_ms'])
+        param_name = cast(str, param_info['name'])
+        self.set_variable(param_name, target_value, duration_ms=duration)
 
-    def _reset_mouth_on_sync_finish(self):
+    def _reset_mouth_on_sync_finish(self) -> None:
         logger.info("同步结束，正在重置嘴型。")
         self._lip_sync_thread = None
         mouth_param = self.find_param_by_usage(bound_params.SpecialUsage.MOUTH_OPEN)
         if mouth_param:
-            duration = self.config['lip_sync']['close_mouth_duration_ms']
-            self.set_variable(mouth_param['name'], mouth_param['range'][0], duration_ms=duration)
+            duration = int(self.config['lip_sync']['close_mouth_duration_ms'])
+            name = cast(str, mouth_param['name'])
+            rng = cast(Tuple[float, float], mouth_param['range'])
+            self.set_variable(name, rng[0], duration_ms=duration)
 
     def _on_plugins_load_finished(self, instantiated_plugins: list[IEmotePlugin]) -> None:
         logger.info(f"后台插件实例化完成。共 {len(instantiated_plugins)} 个插件，现在在主线程中初始化和注册...")
@@ -408,13 +458,14 @@ class EmoteController(QObject):
         self.plugins_load_finished.emit()
 
         elapsed_s = (time.time() - self._splash_start_time)
-        delay_ms = max(0, (self.config["splash"]["min_splash_duration_ms"] - elapsed_s*1000))
+        splash_min_ms = float(self.config["splash"]["min_splash_duration_ms"])
+        delay_ms = max(0.0, (splash_min_ms - elapsed_s*1000))
         logger.info(f"插件加载和初始化耗时 {elapsed_s:.2f} 秒。将延迟 {delay_ms:.0f}ms 以满足最小显示时长。")
 
         QTimer.singleShot(int(delay_ms), self._proceed_to_model_loading_step)
 
     @Slot(str)
-    def load_model(self, path_or_name: str):
+    def load_model(self, path_or_name: str) -> None:
         """
         动态加载或更换模型，并自动从缓存或解包获取其变量映射表。
 
@@ -443,7 +494,7 @@ class EmoteController(QObject):
         self.view_adapter.run_javascript(f"loadNewModel({safe_url});")
 
     @Slot()
-    def save_bindings(self):
+    def save_bindings(self) -> None:
         """
         将当前在内存中的 `variable_map` (可能已被用户修改) 保存回缓存文件。
 
@@ -458,21 +509,21 @@ class EmoteController(QObject):
         bound_params.update_cache(self.current_model_filename, self.variable_map)
 
     @Slot()
-    def show(self):
+    def show(self) -> None:
         """
         显示模型（如果它被隐藏了）。
         """
         self._safe_run(f'{self.js_player_name}.hide = false;')
 
     @Slot()
-    def hide(self):
+    def hide(self) -> None:
         """
         隐藏模型，使其不可见。动画和物理效果仍在后台计算。
         """
         self._safe_run(f'{self.js_player_name}.hide = true;')
 
     @Slot(queue.Queue)
-    def start_lip_sync(self, audio_queue: queue.Queue[Optional[FloatArray]]):
+    def start_lip_sync(self, audio_queue: queue.Queue[Optional[FloatArray]]) -> None:
         """
         根据一个外部音频流队列启动口型同步，这玩意会自适应音量大小(大概吧？)。
         """
@@ -489,10 +540,10 @@ class EmoteController(QObject):
         lip_sync_config = self.config['lip_sync']
         self._lip_sync_thread = StreamLipSyncThread(
             audio_queue,
-            mean_decay_time=lip_sync_config['mean_decay_time_s'],
-            peak_decay_time=lip_sync_config['peak_decay_time_s'],
-            update_fps=lip_sync_config['update_fps'],
-            activation_ratio=lip_sync_config['activation_ratio']
+            mean_decay_time=float(lip_sync_config['mean_decay_time_s']),
+            peak_decay_time=float(lip_sync_config['peak_decay_time_s']),
+            update_fps=int(lip_sync_config['update_fps']),
+            activation_ratio=float(lip_sync_config['activation_ratio'])
         )
         self._lip_sync_thread.mouth_open_ratio_updated.connect(self._on_mouth_ratio_update)
         self._lip_sync_thread.debug_data_updated.connect(self.lip_sync_debug_data.emit)
@@ -501,7 +552,7 @@ class EmoteController(QObject):
 
 
     @Slot(str)
-    def start_lip_sync_from_file(self, filepath: str):
+    def start_lip_sync_from_file(self, filepath: str) -> None:
         """
         一个高级便利函数，用于从 .wav 文件启动口型同步。
         它在内部创建队列，并启动文件到流的转换器线程。
@@ -511,11 +562,11 @@ class EmoteController(QObject):
         
         audio_queue: queue.Queue[Optional[FloatArray]] = queue.Queue()
         self.start_lip_sync(audio_queue) 
-        hz = self.config.get('file_streaming', {}).get('blocksize_hz', 30)
+        hz = int(self.config.get('file_streaming', {}).get('blocksize_hz', 30))
         stream_audio_file(filepath, audio_queue, self._streamer_stop_event, hz)
 
     @Slot()
-    def stop_lip_sync(self):
+    def stop_lip_sync(self) -> None:
         """顾名思义，停止口型同步。"""
         if self._streamer_stop_event:
             self._streamer_stop_event.set()
@@ -526,7 +577,9 @@ class EmoteController(QObject):
 
     # --- 2. 变换与位置 (Transform) ---
     @Slot()
-    def set_coord(self, x: int, y: int, duration_ms: int = 100):
+    @Slot(int, int) 
+    @Slot(int, int, int)
+    def set_coord(self, x: int, y: int, duration_ms: int = 100) -> None:
         """
         设置模型在画布上的坐标。
 
@@ -548,7 +601,7 @@ class EmoteController(QObject):
         self._safe_run(f'{self.js_player_name}.setCoord({x}, {y}, {duration_ms});')
 
     @Slot(float,int)
-    def set_scale(self, scale: float, duration_ms: int = 100):
+    def set_scale(self, scale: float, duration_ms: int = 100) -> None:
         """
         设置模型的缩放比例。
 
@@ -565,7 +618,7 @@ class EmoteController(QObject):
         self._safe_run(f'{self.js_player_name}.setScale({scale}, {duration_ms});')
 
     @Slot(float,int)
-    def set_rotation(self, angle_deg: float, duration_ms: int = 100):
+    def set_rotation(self, angle_deg: float, duration_ms: int = 100) -> None:
         """
         设置模型的旋转角度。
 
@@ -582,7 +635,7 @@ class EmoteController(QObject):
         self._safe_run(f'{self.js_player_name}.setRot({angle_rad}, {duration_ms});')
 
     @Slot(int)
-    def auto_center(self, duration_ms: int = 300):
+    def auto_center(self, duration_ms: int = 300) -> None:
         """
         自动调整模型的缩放和位置，使其完美地居中于视图中。
 
@@ -598,7 +651,7 @@ class EmoteController(QObject):
     # --- 3. 动画控制 (Animation) ---
 
     @Slot(str)
-    def play(self, timeline_name: str):
+    def play(self, timeline_name: str) -> None:
         """
         播放一个主时间轴动画。
 
@@ -616,7 +669,8 @@ class EmoteController(QObject):
         safe_name = json.dumps(timeline_name)
         self._safe_run(f'{self.js_player_name}.mainTimelineLabel = {safe_name};')
 
-    def animation_reset(self, duration_ms: int|None =None):
+    @Slot(int)
+    def animation_reset(self, duration_ms: Optional[int] = None) -> None:
         """
         重置模型的所有状态到初始默认值。
 
@@ -628,24 +682,27 @@ class EmoteController(QObject):
         
         它提供了一种快速将模型恢复到“干净”状态的方法。
         """
-        if duration_ms is None or duration_ms <0:
-            duration_ms=int(self.config["animation"]["reset_duration_ms"])
+        if duration_ms is None or duration_ms < 0:
+            duration_ms = int(self.config["animation"]["reset_duration_ms"])
+        
         self.stop_all_timelines()
         self.set_coord(0, 0, duration_ms)
         self.set_scale(1.0, duration_ms)
-        self.set_rotation(0, duration_ms)
+        self.set_rotation(0.0, duration_ms)
         self.set_global_alpha(1.0, duration_ms)
         self.set_grayscale(0.0, duration_ms)
         self.set_vertex_color(self.config.get('animation', {}).get('reset_default_color', "#808080FF"), duration_ms)
         self.set_physics_scale(1.0, 1.0, 1.0)
-        self.set_wind(0, 0, 0)
-        init_anim_name=self.config["animation"]["initialization_name"]
+        self.set_wind(0.0, 0.0, 0.0)
+        
+        init_anim_name = self.config["animation"]["initialization_name"]
         if init_anim_name is not None:
             logger.info(f"播放初始化动画 '{init_anim_name}'。")
             self.play(init_anim_name)
         logger.info("完成模型状态重置。")
     
-    def set_diff_timeline(self, slot: int, timeline_name: str):
+    @Slot(str)
+    def set_diff_timeline(self, slot: int, timeline_name: str) -> None:
         """
         在指定槽位上播放一个差分（附加）动画。
 
@@ -669,7 +726,9 @@ class EmoteController(QObject):
         safe_name = json.dumps(timeline_name)
         self._safe_run(f'{self.js_player_name}.diffTimelineSlot{slot} = {safe_name};')
 
-    def set_speed(self, speed_ratio: float=1.0):
+    @Slot(float)
+    @Slot(float)
+    def set_speed(self, speed_ratio: float=1.0) -> None:
         """
         设置所有动画的全局播放速度。
 
@@ -683,7 +742,9 @@ class EmoteController(QObject):
         """
         self._safe_run(f'{self.js_player_name}.speed = {speed_ratio};')
 
-    def stop_all_timelines(self):
+    @Slot()
+    @Slot()
+    def stop_all_timelines(self) -> None:
         """
         停止所有正在播放的动画（包括主时间轴和所有差分动画）。
         """
@@ -691,7 +752,8 @@ class EmoteController(QObject):
 
     # --- 4. 外观与特效 (Appearance & FX) ---
 
-    def show_dialog(self, text: str, duration_ms: int = 5000, theme: str = 'default', type_speed: int = 50, anchor_marker: str = 'dialog_anchor'):
+    @Slot(str, int, str, int, str)
+    def show_dialog(self, text: str, duration_ms: int = 5000, theme: str = 'default', type_speed: int = 50, anchor_marker: str = 'dialog_anchor') -> None:
         """
         在角色头顶显示一个可更换主题的对话气泡。
 
@@ -718,7 +780,8 @@ class EmoteController(QObject):
         
         self._safe_run(f'showCharacterDialog({safe_text}, {duration_ms}, {safe_theme}, {y_offset}, {type_speed}, {safe_anchor});')
 
-    def set_background_color(self, r: int, g: int, b: int, a: float):
+    @Slot(int, int, int, float)
+    def set_background_color(self, r: int, g: int, b: int, a: float) -> None:
         """
         设置渲染区域的背景颜色。
 
@@ -745,30 +808,62 @@ class EmoteController(QObject):
         self._cached_bg_color = {"r": r, "g": g, "b": b, "a": a}
         self._safe_run(f"setBackgroundColor({r}, {g}, {b}, {a});")
 
-    def set_window_transparent(self, enable: bool):
+    @Slot(int, int)
+    def set_mask_grid_size(self, width: int, height: int) -> None:
+        """
+        设置遮罩采样的网格大小。
+        
+        网格越小，遮罩越精细，但性能消耗越大。
+        建议值: 30x30
+
+        参数:
+            width (int): 网格宽度
+            height (int): 网格高度
+        """
+        self._safe_run(f"if(typeof setMaskGridSize === 'function') setMaskGridSize({width}, {height});")
+
+    @Slot(bool, bool)
+    def set_window_transparent(self, enable: bool, click_through: bool = False) -> None:
         """
         开启或关闭窗口的桌面透明（无边框）模式。
 
-        开启后窗口变为无边框 (Frameless)。
-        关闭后恢复之前的窗口边框和标题栏。
+        参数:
+            enable (bool): 是否开启透明模式。
+            click_through (bool, optional): 是否开启点击穿透 (基于像素)。默认为 False。
+                                          开启后会消耗一定的 CPU/GPU 资源进行采样。
         """
+        self._is_click_through_enabled = click_through
+        
+        # 通知 JS 开启/关闭采样
+        js_sampling = "true" if (enable and click_through) else "false"
+        self._safe_run(f"if(typeof setClickThroughMode === 'function') setClickThroughMode({js_sampling});")
+
         if enable:
             if not self._is_window_transparent:
                 self.view_adapter.set_window_transparent(True)
                 self._safe_run("setBackgroundColor(0,0,0,0);")
                 
                 self._is_window_transparent = True
-                logger.info("窗口已切换为透明模式")
+                logger.info(f"窗口已切换为透明模式 (穿透={click_through})")
+            
+            # 如果已经开启透明，但改变了穿透状态
+            elif self._is_window_transparent:
+                 if not click_through:
+                     if hasattr(self.view_adapter, 'set_render_mask'):
+                         self.view_adapter.set_render_mask([]) 
         else:
             if self._is_window_transparent:
                 self.view_adapter.set_window_transparent(False)
                 c = self._cached_bg_color
                 self._safe_run(f"setBackgroundColor({c['r']}, {c['g']}, {c['b']}, {c['a']});")
                 
+                if hasattr(self.view_adapter, 'set_render_mask'):
+                     self.view_adapter.set_render_mask([]) # 清除遮罩
+
                 self._is_window_transparent = False
                 logger.info("窗口已恢复普通模式")
 
-    def set_background_image(self, path_or_name: str | None):
+    def set_background_image(self, path_or_name: Optional[str]) -> None:
         """
         设置或移除视图的背景图片。
 
@@ -792,7 +887,7 @@ class EmoteController(QObject):
             safe_url = json.dumps(img_url)
             self._safe_run(f"setBackgroundImage({safe_url});")
 
-    def set_grayscale(self, intensity: float, duration_ms: int = 0):
+    def set_grayscale(self, intensity: float, duration_ms: int = 0) -> None:
         """
         设置模型的灰度（黑白）效果。
 
@@ -809,7 +904,7 @@ class EmoteController(QObject):
         value = max(0.0, min(float(intensity), 1.0))
         self._safe_run(f'{self.js_player_name}.setGrayscale({value}, {duration_ms});')
 
-    def set_global_alpha(self, alpha: float, duration_ms: int = 0):
+    def set_global_alpha(self, alpha: float, duration_ms: int = 0) -> None:
         """
         设置模型的全局透明度。
 
@@ -824,7 +919,7 @@ class EmoteController(QObject):
         value = max(0.0, min(float(alpha), 1.0))
         self._safe_run(f'{self.js_player_name}.setGlobalAlpha({value}, {duration_ms});')
 
-    def set_vertex_color(self, color_hex: str, duration_ms: int = 0):
+    def set_vertex_color(self, color_hex: str, duration_ms: int = 0) -> None:
         """
         为模型叠加一层顶点颜色。
 
@@ -845,7 +940,7 @@ class EmoteController(QObject):
 
     # --- 5. 物理与环境 (Physics & Environment) ---
 
-    def set_physics_scale(self, hair: float = 1.0, parts: float = 1.0, bust: float = 1.0):
+    def set_physics_scale(self, hair: float = 1.0, parts: float = 1.0, bust: float = 1.0) -> None:
         """
         分别设置不同部位的物理摆动幅度。
 
@@ -864,7 +959,7 @@ class EmoteController(QObject):
         self._safe_run(f'{self.js_player_name}.partsScale = {parts};')
         self._safe_run(f'{self.js_player_name}.bustScale = {bust};')
 
-    def set_wind(self, speed: float, power_min: float = 0.0, power_max: float = 2.0):
+    def set_wind(self, speed: float, power_min: float = 0.0, power_max: float = 2.0) -> None:
         """
         开启并设置全局风力效果。
 
@@ -883,7 +978,7 @@ class EmoteController(QObject):
         """
         self._safe_run(f'{self.js_player_name}.windSpeed = {speed}; {self.js_player_name}.windPowMin = {power_min}; {self.js_player_name}.windPowMax = {power_max};')
 
-    def set_render_quality(self, mode: str):
+    def set_render_quality(self, mode: str) -> None:
         """
         设置渲染画质模式。
 
@@ -966,9 +1061,62 @@ class EmoteController(QObject):
             if not attr.startswith('__')
         ]
 
+    @Slot(str, str)
+    def add_resource_path(self, category: str, path: str) -> None:
+        """
+        注册额外的资源搜索路径。
+        
+        Args:
+            category (str): 资源类别 ('models', 'backgrounds', 'dialogs')
+            path (str): 文件夹的绝对路径或相对路径
+        """
+        add_resource_directory(category, path)
+
+    @Slot(result=dict)
+    def list_available_resources(self) -> Dict[str, Dict[str, str]]:
+        """
+        列出所有可用资源（模型、背景、对话框主题）。
+        扫描所有已注册的资源目录。
+        """
+        resources: Dict[str, Dict[str, str]] = {
+            "models": {},
+            "backgrounds": {},
+            "dialogs": {}
+        }
+        
+        categories = ["models", "backgrounds", "dialogs"]
+        
+        for cat in categories:
+            # A. Default
+            default_path = os.path.join(WEB_FRONTEND_ROOT, cat)
+            if os.path.exists(default_path):
+                for f in os.listdir(default_path):
+                    should_add = False
+                    if cat == 'models' and f.endswith('.psb'): should_add = True
+                    elif cat == 'backgrounds' and f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')): should_add = True
+                    elif cat == 'dialogs' and f.endswith('.html'): should_add = True
+                    
+                    if should_add:
+                        resources[cat][f] = os.path.join(default_path, f)
+            
+            # B. Custom (Override)
+            if cat in RESOURCE_SEARCH_PATHS:
+                for path in reversed(RESOURCE_SEARCH_PATHS[cat]):
+                    if os.path.exists(path):
+                        for f in os.listdir(path):
+                            should_add = False
+                            if cat == 'models' and f.endswith('.psb'): should_add = True
+                            elif cat == 'backgrounds' and f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')): should_add = True
+                            elif cat == 'dialogs' and f.endswith('.html'): should_add = True
+                            
+                            if should_add:
+                                resources[cat][f] = os.path.join(path, f)
+
+        return resources
+
     # --- 7. 底层参数控制 (Advanced) ---
 
-    def set_variable(self, name: str, value: float, duration_ms: int = 0):
+    def set_variable(self, name: str, value: float, duration_ms: int = 0) -> None:
         """
         直接设置模型的一个底层变量的值。
 
@@ -996,7 +1144,7 @@ class EmoteController(QObject):
         self._safe_query(f'{self.js_player_name}.getVariable({safe_name})', callback)
 
     # --- 8. 鼠标交互控制 ---
-    def enable_drag(self, enable: bool):
+    def enable_drag(self, enable: bool) -> None:
         """
         开启或关闭模型的鼠标拖动功能。
 
@@ -1006,7 +1154,7 @@ class EmoteController(QObject):
         js_bool = json.dumps(enable) 
         self.view_adapter.run_javascript(f"enablePlayerDrag({js_bool});")
 
-    def enable_zoom(self, enable: bool):
+    def enable_zoom(self, enable: bool) -> None:
         """
         开启或关闭模型的鼠标滚轮缩放功能。
 
@@ -1016,7 +1164,7 @@ class EmoteController(QObject):
         js_bool = json.dumps(enable)
         self.view_adapter.run_javascript(f"enablePlayerZoom({js_bool});")
 
-    def enable_gaze_control(self, enable: bool):
+    def enable_gaze_control(self, enable: bool) -> None:
         """
         开启或关闭模型的视线跟随鼠标功能 (数据驱动版)。
         """

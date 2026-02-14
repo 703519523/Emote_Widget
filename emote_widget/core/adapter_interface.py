@@ -45,6 +45,13 @@ class IViewAdapter(ABC):
         """
         self._log_not_implemented("set_mouse_pass_through")
 
+    def set_render_mask(self, rects: list[list[int]]) -> None:
+        """
+        [可选] 设置渲染区域掩码 (用于点击穿透)。
+        rects: [[x, y, w, h], ...] 矩形列表
+        """
+        self._log_not_implemented("set_render_mask")
+
     def get_ui_object(self) -> Any:
         """
         [可选] 返回底层的 UI 控件对象。

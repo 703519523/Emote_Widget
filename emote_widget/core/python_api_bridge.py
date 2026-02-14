@@ -16,6 +16,9 @@ class PythonApiBridge(QObject):
     # 通用查询回传信号，参数为 (request_id: str, result_json: str)
     query_result_signal = Signal(str, str)
 
+    # 渲染掩码更新信号，参数为 (mask_data_json: str)
+    render_mask_updated_signal = Signal(str)
+
     def __init__(self, controller: 'QObject | None' = None):
         super().__init__()
         self._controller = controller
@@ -52,3 +55,9 @@ class PythonApiBridge(QObject):
     def on_js_error(self, message: str, stack: str):
         """接收来自 JavaScript 的错误并记录。"""
         logger.error(f"[JavaScript Error]\n  Message: {message}\n  Stack: {stack}")
+
+    @Slot(str)
+    def receive_render_mask(self, mask_json: str):
+        """接收来自 JS 的渲染区域掩码数据。"""
+        # logger.debug(f"--> Bridge.receive_render_mask: len={len(mask_json)}")
+        self.render_mask_updated_signal.emit(mask_json)

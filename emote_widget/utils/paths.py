@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from typing import Dict, List
 from PySide6.QtCore import QUrl
 from .logger import file_logger as logger
 
@@ -7,6 +8,31 @@ from .logger import file_logger as logger
 # 结构: emote_widget/utils/paths.py -> (up) -> emote_widget/ -> (down) -> web_frontend
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_FRONTEND_ROOT = os.path.join(_BASE_DIR, 'web_frontend')
+
+RESOURCE_SEARCH_PATHS: Dict[str, List[str]] = {
+    'models': [],
+    'backgrounds': [],
+    'dialogs': []
+}
+
+def add_resource_directory(category: str, path: str) -> None:
+    """
+    添加一个资源搜索目录。
+    category: 'models', 'backgrounds', 'dialogs'
+    """
+    if category in RESOURCE_SEARCH_PATHS:
+        abs_path = os.path.abspath(path)
+        if abs_path not in RESOURCE_SEARCH_PATHS[category]:
+            RESOURCE_SEARCH_PATHS[category].insert(0, abs_path) # Insert at beginning to prioritize user paths
+            resolve_resource_url.cache_clear()
+            logger.info(f"添加资源搜索路径 [{category}]: {abs_path}")
+
+def getresource_search_paths(category: str) -> List[str]:
+    """
+    获取指定类别的资源搜索路径列表。
+    返回的是列表的副本，以防外部修改影响内部状态。
+    """
+    return list(RESOURCE_SEARCH_PATHS.get(category, []))
 
 @lru_cache(maxsize=128)
 def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> str | None:
@@ -23,10 +49,19 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
     if os.path.exists(path_or_name):
         final_path = os.path.abspath(path_or_name)
     else:
-        # 2. 检查内部默认目录
-        internal_path = os.path.join(WEB_FRONTEND_ROOT, internal_subfolder, path_or_name)
-        if os.path.exists(internal_path):
-            final_path = internal_path
+        # 2. 检查自定义搜索路径
+        if internal_subfolder in RESOURCE_SEARCH_PATHS:
+            for search_path in RESOURCE_SEARCH_PATHS[internal_subfolder]:
+                candidate = os.path.join(search_path, path_or_name)
+                if os.path.exists(candidate):
+                    final_path = candidate
+                    break
+        
+        # 3. 检查内部默认目录 (如果没有在自定义路径中找到)
+        if not final_path:
+            internal_path = os.path.join(WEB_FRONTEND_ROOT, internal_subfolder, path_or_name)
+            if os.path.exists(internal_path):
+                final_path = internal_path
     
     if final_path:
         # 转换为 emote:// 协议
