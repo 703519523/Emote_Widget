@@ -490,6 +490,7 @@ class TestMainWindow(QMainWindow):
         # 使用新资源机制注册根目录下的资源文件夹
         cwd = os.getcwd()
         self.emote_view.controller.add_resource_path('models', os.path.join(cwd, 'models'))
+        self.emote_view.controller.add_resource_path('models', os.path.join(cwd, 'modellist'))
         self.emote_view.controller.add_resource_path('backgrounds', os.path.join(cwd, 'backgrounds'))
         
         # 获取可用资源列表

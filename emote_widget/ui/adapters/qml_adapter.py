@@ -11,15 +11,14 @@ EmoteWidget QML 适配器模块。
     3. **JS 执行**: 必须通过 `QMetaObject.invokeMethod` 动态调用 QML 侧的 `runJavaScript`。
 """
 
-from typing import Optional, cast, List
-from PySide6.QtCore import QObject, Qt, QMetaObject, Q_ARG, QRect
+from typing import Optional, cast, List, Any
+from PySide6.QtCore import QObject, Qt, QRect
 from PySide6.QtGui import QRegion
 from PySide6.QtQuick import QQuickItem
 
 # 引入接口和日志
 from emote_widget.core.adapter_interface import IViewAdapter
 from emote_widget.utils.logger import adapter_logger as logger
-
 class QmlAdapter(IViewAdapter):
     """
     [QML 适配器] 实现 IViewAdapter 接口，桥接 Controller 与 QML WebEngineView。
@@ -86,24 +85,23 @@ class QmlAdapter(IViewAdapter):
         """
         [实现接口] 在 QML WebEngineView 中执行 JavaScript。
         
-        使用 `QMetaObject.invokeMethod` 动态调用 QML 对象的 `runJavaScript` 方法。
+        单一策略：直接调用 QML Wrapper 的 runJavaScript(script, None)。
+        说明：
+        - 避免 Python 回调函数转换为 QJSValue 导致的 Shiboken 警告。
+        - 明确且可控，失败时打印完整错误日志。
         """
         if not self._item:
             logger.debug("QML Adapter: View尚未绑定，忽略JS执行。")
             return
 
-        # [Safety] 确保脚本不包含会导致 QML 解析错误的字符
-        # 但不要移除换行符，因为单行注释 (//) 依赖换行符结束
+        if not hasattr(self._item, "runJavaScript"):
+            logger.error("QML Adapter: 目标 QML Item 不支持 runJavaScript 方法。")
+            return
         try:
-            QMetaObject.invokeMethod(
-                self._item, 
-                b"runJavaScript", 
-                Qt.ConnectionType.DirectConnection, # Direct 还是 Queued 取决于线程，通常 Direct 更快
-                Q_ARG(str, script)
-            )
+            cast(Any, self._item).runJavaScript(script, None)
         except Exception as e:
             logger.error(f"QML Adapter: JS执行失败: {e}")
-            logger.error(f"脚本内容: {script[:200]}...")
+            logger.error(f"脚本内容片段: {script[:200]}...")
 
     def register_python_bridge(self, bridge_obj: QObject, name: str) -> None:
         """

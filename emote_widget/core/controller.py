@@ -35,7 +35,7 @@ from emote_widget.core.python_api_bridge import PythonApiBridge
 
 import emote_widget.utils.bound_params as bound_params
 from emote_widget.utils.audio_utils import stream_audio_file
-from emote_widget.utils.paths import resolve_resource_url, add_resource_directory
+from emote_widget.utils.paths import resolve_resource_url, add_resource_directory, scan_directory_for_resources, is_path_allowed
 # Access private members to implement strict list_available_resources logic
 from emote_widget.utils.paths import RESOURCE_SEARCH_PATHS, WEB_FRONTEND_ROOT
 
@@ -908,6 +908,7 @@ class EmoteController(QObject):
                 self._is_window_transparent = False
                 logger.info("窗口已恢复普通模式")
 
+    @Slot("QVariant")
     def set_background_image(self, path_or_name: Optional[str]) -> None:
         """
         设置背景图片。
@@ -915,7 +916,7 @@ class EmoteController(QObject):
         Args:
             path_or_name (Optional[str]): 图片路径或名称。None 表示移除。
         """
-        if path_or_name is None:
+        if not path_or_name: # Handle None or empty string
             self._safe_run("setBackgroundImage(null);")
             return
 
@@ -924,6 +925,7 @@ class EmoteController(QObject):
             safe_url = json.dumps(img_url)
             self._safe_run(f"setBackgroundImage({safe_url});")
 
+    @Slot(float, int)
     def set_grayscale(self, intensity: float, duration_ms: int = 0) -> None:
         """
         设置灰度效果。
@@ -935,6 +937,7 @@ class EmoteController(QObject):
         value = max(0.0, min(float(intensity), 1.0))
         self._safe_run(f'{self.js_player_name}.setGrayscale({value}, {duration_ms});')
 
+    @Slot(float, int)
     def set_global_alpha(self, alpha: float, duration_ms: int = 0) -> None:
         """
         设置全局透明度。
@@ -946,6 +949,7 @@ class EmoteController(QObject):
         value = max(0.0, min(float(alpha), 1.0))
         self._safe_run(f'{self.js_player_name}.setGlobalAlpha({value}, {duration_ms});')
 
+    @Slot(str, int)
     def set_vertex_color(self, color_hex: str, duration_ms: int = 0) -> None:
         """
         设置顶点叠加颜色。
@@ -959,6 +963,7 @@ class EmoteController(QObject):
 
     # --- 5. 物理与环境 (Physics & Environment) ---
 
+    @Slot(float, float, float)
     def set_physics_scale(self, hair: float = 1.0, parts: float = 1.0, bust: float = 1.0) -> None:
         """
         设置物理摆动幅度。
@@ -972,6 +977,7 @@ class EmoteController(QObject):
         self._safe_run(f'{self.js_player_name}.partsScale = {parts};')
         self._safe_run(f'{self.js_player_name}.bustScale = {bust};')
 
+    @Slot(float, float, float)
     def set_wind(self, speed: float, power_min: float = 0.0, power_max: float = 2.0) -> None:
         """
         设置风力参数。
@@ -983,6 +989,7 @@ class EmoteController(QObject):
         """
         self._safe_run(f'{self.js_player_name}.windSpeed = {speed}; {self.js_player_name}.windPowMin = {power_min}; {self.js_player_name}.windPowMax = {power_max};')
 
+    @Slot(str)
     def set_render_quality(self, mode: str) -> None:
         """
         设置渲染质量模式。
@@ -1003,23 +1010,28 @@ class EmoteController(QObject):
 
     # --- 6. 数据查询 (Data Query) ---
 
+    @Slot("QVariant")
     def get_main_timelines(self, callback: Callable[[Any], None]) -> None:
         """异步获取所有主时间轴名称。"""
         self._safe_query(f'{self.js_player_name}.mainTimelineLabels', callback)
 
+    @Slot("QVariant")
     def get_diff_timelines(self, callback: Callable[[Any], None]) -> None:
         """异步获取所有差分时间轴名称。"""
         self._safe_query(f'{self.js_player_name}.diffTimelineLabels', callback)
 
+    @Slot("QVariant")
     def get_variables(self, callback: Callable[[Any], None]) -> None:
         """异步获取模型变量列表。"""
         self._safe_query(f'{self.js_player_name}.variableList', callback)
 
+    @Slot(str,"QVariant")
     def get_marker_position(self, marker_name: str, callback: Callable[[Any], None]) -> None:
         """异步获取模型标记点位置。"""
         safe_name = json.dumps(marker_name)
         self._safe_query(f'{self.js_player_name}.getMarkerPosition({safe_name})', callback)
-
+    
+    @Slot()
     def get_available_special_usage_tags(self) -> list[str]:
         """获取所有可用的特殊用途标签列表。"""
         return [
@@ -1053,38 +1065,36 @@ class EmoteController(QObject):
             "dialogs": {}
         }
         
-        categories = ["models", "backgrounds", "dialogs"]
+        category_extensions: Dict[str, Tuple[str, ...]] = {
+            "models": (".psb",),
+            "backgrounds": (".png", ".jpg", ".jpeg", ".gif"),
+            "dialogs": (".html",)
+        }
         
-        for cat in categories:
-            # A. Default
+        for cat, exts in category_extensions.items():
+            # 1. 扫描默认目录
             default_path = os.path.join(WEB_FRONTEND_ROOT, cat)
-            if os.path.exists(default_path):
-                for f in os.listdir(default_path):
-                    should_add = False
-                    if cat == 'models' and f.endswith('.psb'): should_add = True
-                    elif cat == 'backgrounds' and f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')): should_add = True
-                    elif cat == 'dialogs' and f.endswith('.html'): should_add = True
-                    
-                    if should_add:
-                        resources[cat][f] = os.path.join(default_path, f)
+            scanned = scan_directory_for_resources(default_path, exts, recursive=True)
             
-            # B. Custom (Override)
+            for name, path in scanned.items():
+                if is_path_allowed(path):
+                    resources[cat][name] = path
+            
+            # 2. 扫描自定义目录 (从旧到新, 后面的覆盖前面的)
             if cat in RESOURCE_SEARCH_PATHS:
                 for path in reversed(RESOURCE_SEARCH_PATHS[cat]):
-                    if os.path.exists(path):
-                        for f in os.listdir(path):
-                            should_add = False
-                            if cat == 'models' and f.endswith('.psb'): should_add = True
-                            elif cat == 'backgrounds' and f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')): should_add = True
-                            elif cat == 'dialogs' and f.endswith('.html'): should_add = True
-                            
-                            if should_add:
-                                resources[cat][f] = os.path.join(path, f)
+                    # 递归扫描自定义目录，以支持 modellist 这种包含子文件夹的结构
+                    custom_scanned = scan_directory_for_resources(path, exts, recursive=True)
+                    for name, abs_path in custom_scanned.items():
+                         # [Security] 二次校验：确保路径在白名单内
+                        if is_path_allowed(abs_path):
+                            resources[cat][name] = abs_path
 
         return resources
 
     # --- 7. 底层参数控制 (Advanced) ---
 
+    @Slot(str, float, int)
     def set_variable(self, name: str, value: float, duration_ms: int = 0) -> None:
         """
         直接设置底层变量的值。
@@ -1109,16 +1119,19 @@ class EmoteController(QObject):
         self._safe_query(f'{self.js_player_name}.getVariable({safe_name})', callback)
 
     # --- 8. 鼠标交互控制 ---
+    @Slot(bool)
     def enable_drag(self, enable: bool) -> None:
         """开启或关闭模型的鼠标拖动功能。"""
         js_bool = json.dumps(enable) 
         self.view_adapter.run_javascript(f"enablePlayerDrag({js_bool});")
 
+    @Slot(bool)
     def enable_zoom(self, enable: bool) -> None:
         """开启或关闭模型的鼠标滚轮缩放功能。"""
         js_bool = json.dumps(enable)
         self.view_adapter.run_javascript(f"enablePlayerZoom({js_bool});")
 
+    @Slot(bool)
     def enable_gaze_control(self, enable: bool) -> None:
         """
         开启或关闭数据驱动的视线跟随功能。
