@@ -108,10 +108,9 @@ class BehaviorWorker(QObject):
     负责处理 Qt 信号和定时器的 Worker 类。
     """
     
-    def __init__(self, controller: "EmoteController", logger: Optional["logging.Logger"]):
+    def __init__(self, plugin: "BehaviorEnginePlugin"):
         super().__init__()
-        self.controller = controller
-        self.logger = logger
+        self.plugin = plugin
         
         self.current_state = State.IDLE
         self.last_interaction_time = time.time()
@@ -133,6 +132,14 @@ class BehaviorWorker(QObject):
         
         # 启动
         self._schedule_next_heartbeat()
+
+    @property
+    def controller(self) -> "EmoteController":
+        return self.plugin.controller
+
+    @property
+    def logger(self) -> Optional["logging.Logger"]:
+        return getattr(self.plugin, 'logger', None)
 
     def cleanup(self):
         """清理资源"""
@@ -318,7 +325,7 @@ class BehaviorEnginePlugin(IEmotePlugin):
 
     def __init__(self) -> None:
         super().__init__()
-        self.worker = None
+        self.worker: Optional[BehaviorWorker] = None
 
     def get_name(self) -> str:
         return "behavior_engine"
@@ -326,11 +333,10 @@ class BehaviorEnginePlugin(IEmotePlugin):
     def get_description(self) -> str:
         return "基于马尔可夫链的分层自主行为引擎。"
 
-    def initialize(self, widget: "EmoteController"):
-        super().initialize(widget)
-        
+    def initialize(self):
         # 实例化 Worker 并保留引用
-        self.worker = BehaviorWorker(self.widget, getattr(self, 'logger', None))
+        # 将插件自身传递给 Worker，确保 Worker 始终访问最新的 controller 引用 (从 SandboxProxy 到 RealController)
+        self.worker = BehaviorWorker(self)
         
         if hasattr(self, 'logger'):
             self.logger.info("Behavior Engine Plugin initialized (Layered Animation Mode).")

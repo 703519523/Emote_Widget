@@ -56,9 +56,6 @@ class DebugToolsPlugin(IEmotePlugin):
     Attributes:
         controller: 对 EmoteController 实例的引用，用于与主程序交互
     """
-    # EmoteController 实例的引用，初始为 None，在 initialize 中设置
-    controller: EmoteController | None
-
     def __init__(self):
         """
         插件构造函数
@@ -68,7 +65,6 @@ class DebugToolsPlugin(IEmotePlugin):
         controller 的状态。
         """
         super().__init__() # 初始化父类 (如果是 QObject 继承链这很重要)
-        self.controller = None 
 
     def get_name(self) -> str:
         """
@@ -102,24 +98,22 @@ class DebugToolsPlugin(IEmotePlugin):
         """
         return "示例调试插件 - 演示插件系统基本功能"
 
-    def initialize(self, widget: EmoteController):
+    def initialize(self):
         """
         插件初始化方法，在插件被加载时调用。
 
         这是插件生命周期中最重要的方法之一。在这里你可以:
-        1. 保存对 EmoteController 的引用
-        2. 连接需要的信号
-        3. 初始化插件的状态
-        4. 设置定时器或其他长期运行的功能
+        1. 连接需要的信号
+        2. 初始化插件的状态
+        3. 设置定时器或其他长期运行的功能
 
-        Args:
-            widget: EmoteController 实例，提供了与主程序交互的所有功能
+        注意：
+        此时 self.controller 是一个沙盒代理，操作会被暂存。
         """
-        # 保存controller引用供后续使用
-        self.controller = widget
         self.logger.info(f"[{self.get_name()}] 插件已初始化！")
         
         # 示例：连接到一个 widget 信号以接收模型加载通知
+        # 直接使用 self.controller 访问
         self.controller.player_ready.connect(self.on_player_ready)
 
     def cleanup(self):

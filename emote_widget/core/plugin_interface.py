@@ -14,7 +14,11 @@ class IEmotePlugin(ABC):
     Attributes:
         logger: 插件专属的logger实例。在插件加载时由系统自动设置。
                 插件应该使用这个logger而不是print()来输出信息。
+        controller: EmoteController 的引用，提供与主程序交互的API。
+                    在 initialize() 被调用前，此属性将由框架注入。
     """
+    controller: "EmoteController"
+
     def __init__(self) -> None:
         super().__init__()
         self.logger: logging.Logger
@@ -44,7 +48,7 @@ class IEmotePlugin(ABC):
         pass
 
     @abstractmethod
-    def initialize(self, widget: "EmoteController"):
+    def initialize(self):
         """
         插件的初始化入口点。
 
@@ -52,12 +56,11 @@ class IEmotePlugin(ABC):
         插件应该在这里执行其所有的初始化逻辑，例如连接信号、
         添加UI元素等。
 
-        参数:
-            widget (EmoteWidget):
-                EmoteWidget 的主实例。插件可以通过这个实例与主应用交互，
-                调用其公共方法，连接其信号。
+        注意：
+        插件应通过 self.controller 属性访问主程序API。
+        在调用此方法前，框架会确保 self.controller 已被设置为安全的代理对象。
         """
-        self.widget = widget # 存储对主 widget 的引用
+        pass
 
     @abstractmethod
     def cleanup(self):

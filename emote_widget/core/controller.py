@@ -32,6 +32,7 @@ from emote_widget.core.lipsync_thread import StreamLipSyncThread
 from emote_widget.core.plugin_system import PluginAccessor, PluginLoaderWorker
 from emote_widget.core.plugin_interface import IEmotePlugin
 from emote_widget.core.python_api_bridge import PythonApiBridge
+from emote_widget.utils.controller_proxy import SandboxProxy, PoisonPillProxy
 
 import emote_widget.utils.bound_params as bound_params
 from emote_widget.utils.audio_utils import stream_audio_file
@@ -567,12 +568,33 @@ class EmoteController(QObject):
         
         for plugin in instantiated_plugins:
             try:
-                plugin.initialize(self)
+                # 1. 创建沙盒代理
+                sandbox = SandboxProxy(self)
+                plugin.controller = cast("EmoteController", sandbox) # Type hint hack
+                
+                # 2. 尝试初始化 (此时操作被拦截进队列)
+                plugin.initialize()
+                
+                # 3. 验证成功：提交事务并替换为真实控制器
+                sandbox.commit()
+                # 替换回真实的控制器（或常规的安全代理），解除沙盒限制
+                # 这里我们直接给 self，或者如果需要保护私有成员，也可以给 ControllerProxy(self)
+                # 为了保持一致性，且之前的 plugin.controller 可能是 Proxy，这里给 self 最直接。
+                # 但根据 Prompt 要求 "keep access restriction to private members"，
+                # 我们可能应该给 ControllerProxy(self) 或者就给 self 如果插件被认为是受信的。
+                # 任务说明 C.3 "将 plugin.controller 替换为真实的控制器实例"。
+                plugin.controller = self 
+                
                 self.plugins.register(plugin)
+                
             except Exception:
-                error_msg = f"✗ 初始化或注册插件 '{getattr(plugin, 'get_name', lambda: 'Unknown')()}' 时出错。"
+                plugin_name = getattr(plugin, 'get_name', lambda: 'Unknown')()
+                error_msg = f"✗ 初始化插件 '{plugin_name}' 失败，已隔离。"
                 logger.error(error_msg, exc_info=True)
                 self._add_splash_log(error_msg, is_error=True)
+                
+                # 4. 验证失败：隔离插件
+                plugin.controller = cast("EmoteController", PoisonPillProxy(plugin_name))
 
         self.plugins_load_finished.emit()
 
