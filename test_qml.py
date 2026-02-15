@@ -33,6 +33,7 @@ def main():
     import os
     cwd = os.getcwd()
     backend.controller.add_resource_path('models', os.path.join(cwd, 'models'))
+    backend.controller.add_resource_path('models', os.path.join(cwd, 'modellist'))
     backend.controller.add_resource_path('backgrounds', os.path.join(cwd, 'backgrounds'))
     
     engine.rootContext().setContextProperty("EmoteBackend", backend)

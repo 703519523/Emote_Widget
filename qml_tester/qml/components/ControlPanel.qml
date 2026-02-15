@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 Rectangle {
     id: controlPanel
@@ -209,11 +210,44 @@ Rectangle {
                             }
                         }
                         
-                        Button {
-                            id: playVoiceButton // 暂时保留
-                            text: "播放测试语音"
+                        Label { text: "语音播放:" }
+                        RowLayout {
                             Layout.fillWidth: true
-                            onClicked: controlPanel.playVoiceClicked("voice.wav")
+                            TextField {
+                                id: audioPathField
+                                Layout.fillWidth: true
+                                placeholderText: "选择音频文件..."
+                                text: ""
+                            }
+                            Button {
+                                text: "..."
+                                onClicked: audioFileDialog.open()
+                                Layout.preferredWidth: 40
+                            }
+                        }
+                        
+                        Button {
+                            id: playVoiceButton
+                            text: "开始同步"
+                            enabled: audioPathField.text !== ""
+                            Layout.fillWidth: true
+                            onClicked: controlPanel.playVoiceClicked(audioPathField.text)
+                        }
+
+                        FileDialog {
+                            id: audioFileDialog
+                            title: "选择音频文件"
+                            nameFilters: ["Audio Files (*.wav *.mp3)", "All Files (*)"]
+                            onAccepted: {
+                                var path = audioFileDialog.currentFile.toString()
+                                // 移除 file:/// 前缀 (针对 Windows)
+                                if (path.startsWith("file:///")) {
+                                    path = path.substring(8)
+                                } else if (path.startsWith("file://")) {
+                                    path = path.substring(7)
+                                }
+                                audioPathField.text = decodeURIComponent(path)
+                            }
                         }
                         
                         Label { text: "差分动画 (Slot 1):" }

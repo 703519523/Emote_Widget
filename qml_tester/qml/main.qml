@@ -71,25 +71,25 @@ ApplicationWindow {
             // 绑定按钮事件到 EmoteBackend.api (Controller)
             onLoadModelClicked: (name) => EmoteBackend.api.load_model(name)
             onApplyBackgroundClicked: (path) => EmoteBackend.api.set_background_image(path)
-            onAutoCenterClicked: EmoteBackend.api.auto_center()
+            onAutoCenterClicked: EmoteBackend.api.auto_center(100)
             
             onPlayMotionClicked: (name) => EmoteBackend.api.play(name)
             onPlayVoiceClicked: (path) => EmoteBackend.api.start_lip_sync_from_file(path)
             onStopMotionClicked: EmoteBackend.api.stop_all_timelines()
             onDiffTimelineClicked: (slot, name) => EmoteBackend.api.set_diff_timeline(slot, name)
             
-            onShowDialogClicked: (text, duration, theme) => EmoteBackend.api.show_dialog(text, duration, theme)
+            onShowDialogClicked: (text, duration, theme) => EmoteBackend.api.show_dialog(text, duration, theme, 50, "dialog_anchor")
             
-            onScaleChanged: (val) => EmoteBackend.api.set_scale(val)
-            onRotationChanged: (val) => EmoteBackend.api.set_rotation(val)
+            onScaleChanged: (val) => EmoteBackend.api.set_scale(val,100)
+            onRotationChanged: (val) => EmoteBackend.api.set_rotation(val,100)
             onPositionChanged: (x, y) => EmoteBackend.api.set_coord(x, y)
             
-            onAlphaChanged: (val) => EmoteBackend.api.set_global_alpha(val)
-            onGrayscaleChanged: (val) => EmoteBackend.api.set_grayscale(val)
+            onAlphaChanged: (val) => EmoteBackend.api.set_global_alpha(val,100)
+            onGrayscaleChanged: (val) => EmoteBackend.api.set_grayscale(val,100)
             onRenderQualityChanged: (mode) => EmoteBackend.api.set_render_quality(mode)
             
             onPhysicsChanged: (h, p, b) => EmoteBackend.api.set_physics_scale(h, p, b)
-            onWindChanged: (val) => EmoteBackend.api.set_wind(val)
+            onWindChanged: (val) => EmoteBackend.api.set_wind(val,0,3)
             
             onInteractionChanged: (d, z, g) => {
                 EmoteBackend.api.enable_drag(d)
