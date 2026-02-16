@@ -38,7 +38,6 @@ EmoteWidget 插件系统示例插件
 
 from typing import List
 from emote_widget.core.plugin_interface import IEmotePlugin
-from emote_widget.core.controller import EmoteController
 from PySide6.QtWidgets import QWidget
 
 class DebugToolsPlugin(IEmotePlugin):
@@ -161,7 +160,7 @@ class DebugToolsPlugin(IEmotePlugin):
         示例用法:
             widget.plugins.debug.print_widget_size()
         """
-        if self.controller is None:
+        if self.controller:
             self.logger.error("DebugPlugin Error: 控制器未初始化")
             return
             

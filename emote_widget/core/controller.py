@@ -32,6 +32,7 @@ from emote_widget.core.lipsync_thread import StreamLipSyncThread
 from emote_widget.core.plugin_system import PluginAccessor, PluginLoaderWorker
 from emote_widget.core.plugin_interface import IEmotePlugin
 from emote_widget.core.python_api_bridge import PythonApiBridge
+from emote_widget.core.task_dispatcher import EmoteTaskDispatcher, TaskType
 from emote_widget.utils.controller_proxy import SandboxProxy, PoisonPillProxy
 
 import emote_widget.utils.bound_params as bound_params
@@ -95,6 +96,12 @@ class EmoteController(QObject):
     参数: (rects, canvas_width, canvas_height)
     """
 
+    task_started = Signal(str)
+    """Signal(str): 任务开始信号，参数为任务名称。"""
+
+    task_finished = Signal(str)
+    """Signal(str): 任务结束信号，参数为任务名称。"""
+
     def __init__(self, view_adapter: IViewAdapter, plugin_dir: Optional[str] = None, config_override: Optional[Dict[str, Any]] = None, bound_config_override: Optional[str] = None) -> None:
         """
         初始化控制器。
@@ -146,6 +153,12 @@ class EmoteController(QObject):
              self.plugin_dir = os.path.join(os.getcwd(), 'plugins')
 
         self.plugins: PluginAccessor = PluginAccessor()
+
+        # 检测 QML 模式
+        if type(self.view_adapter).__name__ == "QmlAdapter":
+            logger.info("检测到 QML Adapter，已启用插件系统的 QML 安全模式。")
+            self.plugins.set_qml_mode(True)
+
         self._plugin_loader_thread: QThread = QThread(self)
         self._plugin_loader_worker: PluginLoaderWorker = PluginLoaderWorker(self.plugin_dir)
         self._plugin_loader_worker.moveToThread(self._plugin_loader_thread)
@@ -187,6 +200,11 @@ class EmoteController(QObject):
         self._bridge.player_ready_signal.connect(self._on_player_ready_handler)
         self._bridge.query_result_signal.connect(self._handle_query_result)
         self._bridge.render_mask_updated_signal.connect(self._handle_render_mask_update)
+
+        # 任务调度器
+        self.task_dispatcher = EmoteTaskDispatcher()
+        self.task_dispatcher.task_started.connect(self.task_started.emit)
+        self.task_dispatcher.task_finished.connect(self.task_finished.emit)
 
         # 将桥接对象注入到 JS 环境中，对象名为 "py_api"
         self.view_adapter.register_python_bridge(self._bridge, "py_api")
@@ -510,6 +528,7 @@ class EmoteController(QObject):
             1. 停止 LipSync 线程。
             2. 停止并等待插件加载线程。
             3. 调用所有已加载插件的 cleanup 方法。
+            4. 停止任务调度器。
         """
         logger.info("EmoteController: 开始清理资源...")
         
@@ -525,6 +544,10 @@ class EmoteController(QObject):
         # 3. 清理已加载的插件
         if self.plugins:
             self.plugins.cleanup_all()
+        
+        # 4. 清理任务调度器
+        if self.task_dispatcher:
+            self.task_dispatcher.cleanup()
 
         logger.info("EmoteController: 资源清理完毕。")
     
@@ -1076,11 +1099,18 @@ class EmoteController(QObject):
     @Slot(result=dict)
     def list_available_resources(self) -> Dict[str, Dict[str, str]]:
         """
-        扫描并列出所有可用资源。
-
+        [同步版 - 已弃用] 扫描并列出所有可用资源。
+        
+        警告: 对于大文件夹，此操作会阻塞主线程。建议使用 request_refresh_resources。
+        
         Returns:
             Dict: 格式为 { 'models': {name: path}, ... }
         """
+        # 为了兼容性保留同步实现，但复用内部逻辑
+        return self._perform_resource_scan()
+
+    def _perform_resource_scan(self) -> Dict[str, Dict[str, str]]:
+        """执行实际的资源扫描逻辑 (可运行在子线程)。"""
         resources: Dict[str, Dict[str, str]] = {
             "models": {},
             "backgrounds": {},
@@ -1111,8 +1141,36 @@ class EmoteController(QObject):
                          # [Security] 二次校验：确保路径在白名单内
                         if is_path_allowed(abs_path):
                             resources[cat][name] = abs_path
-
         return resources
+
+    @Slot()
+    def request_refresh_resources(self) -> None:
+        """
+        [异步] 请求刷新资源列表。
+        
+        触发后台扫描任务，完成后通过 updateAvailableResources 事件通知前端。
+        """
+        def on_scan_success(resources: Dict[str, Dict[str, str]]) -> None:
+            # 序列化并通过 Bridge 发送给前端
+            logger.info("后台资源扫描完成。")
+            safe_json = json.dumps(resources)
+            # 假设前端有 window.updateAvailableResources(json) 接口
+            # 或者通过事件总线发送
+            # 暂时使用 bridge 的通用事件机制，或者直接调用 JS
+            # 这里调用 JS 端暴露的全局函数（如果存在），或者触发事件
+            self._safe_run(f"if(typeof onResourcesUpdated === 'function') onResourcesUpdated({safe_json});")
+
+        def on_scan_error(e: Exception) -> None:
+            logger.error(f"后台资源扫描失败: {e}")
+
+        self.task_dispatcher.dispatch(
+            task_name="refresh_resources",
+            task_func=self._perform_resource_scan,
+            on_success=on_scan_success,
+            on_error=on_scan_error,
+            task_type=TaskType.IO_BOUND,
+            throttle_key="refresh_resources"
+        )
 
     # --- 7. 底层参数控制 (Advanced) ---
 

@@ -24,6 +24,9 @@ adapter_logger = logging.getLogger("EmoteWidget.Adapter")
 #资源管理 (ResourceManager)
 resource_logger = logging.getLogger("EmoteWidget.Resource")
 
+#任务调度 (TaskDispatcher, Worker)
+worker_logger = logging.getLogger("EmoteWidget.Worker")
+
 
 def setup_logging(level: int = logging.INFO):
     """

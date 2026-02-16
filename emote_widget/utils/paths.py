@@ -1,7 +1,8 @@
 import os
+import threading
 from functools import lru_cache
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from PySide6.QtCore import QUrl
 from .logger import file_logger as logger
 
@@ -62,7 +63,7 @@ class _TTLScanCache:
 
 _scan_cache = _TTLScanCache(ttl_seconds=15.0)
 
-def scan_directory_for_resources(directory_path: str, extensions: Tuple[str, ...], recursive: bool = False, max_depth: int = 1) -> Dict[str, str]:
+def scan_directory_for_resources(directory_path: str, extensions: Tuple[str, ...], recursive: bool = False, max_depth: int = 1, cancel_event: Optional[threading.Event] = None) -> Dict[str, str]:
     """
     高效扫描目录以查找特定扩展名的资源文件。
     
@@ -71,11 +72,12 @@ def scan_directory_for_resources(directory_path: str, extensions: Tuple[str, ...
         extensions: 允许的文件扩展名元组 (例如: ('.psb', '.html'))。应为小写。
         recursive: 是否递归扫描子目录。
         max_depth: 递归最大深度。
+        cancel_event: 可选的取消信号。如果设置，扫描过程中会检查此信号以中断操作。
 
     Returns:
         Dict[str, str]: {文件名: 绝对路径} 的字典。
     """
-    # Create a cache key based on arguments
+    # Create a cache key based on arguments (cancel_event is transient, not part of cache key)
     cache_key = f"{directory_path}|{extensions}|{recursive}|{max_depth}"
     cached = _scan_cache.get(cache_key)
     if cached is not None:
@@ -91,23 +93,24 @@ def scan_directory_for_resources(directory_path: str, extensions: Tuple[str, ...
         allowed_exts = set(ext.lower() for ext in extensions)
 
         def _scan(path: str, current_depth: int):
+            if cancel_event and cancel_event.is_set():
+                return
+            
             if current_depth > max_depth:
                 return
 
             try:
                 with os.scandir(path) as it:
                     for entry in it:
+                        if cancel_event and cancel_event.is_set():
+                            return
+
                         try:
                             if entry.is_file():
                                 # Check extension
                                 name = entry.name
                                 ext = os.path.splitext(name)[1].lower()
                                 if ext in allowed_exts:
-                                    # [Security] Ensure path is allowed?
-                                    # logic in controller will call is_path_allowed on result, 
-                                    # but we can also just return absolute paths here.
-                                    # The requirement says "Make sure every path ... is checked by is_path_allowed" in Controller refactor.
-                                    # So we just return raw scan results here.
                                     results[name] = entry.path
                             
                             elif recursive and entry.is_dir() and not entry.name.startswith('.'):
@@ -121,6 +124,10 @@ def scan_directory_for_resources(directory_path: str, extensions: Tuple[str, ...
 
         _scan(directory_path, 0)
         
+        if cancel_event and cancel_event.is_set():
+            logger.info("Resource scanning was cancelled.")
+            return {}
+
         # Update cache
         _scan_cache.set(cache_key, results)
         

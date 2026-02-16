@@ -28,6 +28,11 @@ class PluginAccessor:
     """
     def __init__(self) -> None:
         self._plugins: Dict[str, IEmotePlugin] = {}
+        self._is_qml_mode: bool = False
+
+    def set_qml_mode(self, enabled: bool) -> None:
+        """设置是否处于 QML 模式。在 QML 模式下，获取插件会返回 SafeProxy。"""
+        self._is_qml_mode = enabled
 
     def register(self, plugin: IEmotePlugin) -> None:
         """
@@ -73,6 +78,12 @@ class PluginAccessor:
         plugin = self.get(name)
         if plugin is None:
             raise AttributeError(f"未找到插件: '{name}'")
+            
+        if self._is_qml_mode:
+            # 在 QML 模式下，返回安全的代理对象
+            from emote_widget.utils.proxy import create_safe_proxy
+            return create_safe_proxy(plugin)
+            
         return plugin
 
 class PluginLoaderWorker(QObject):
@@ -172,7 +183,7 @@ class PluginLoaderWorker(QObject):
         for i, mod_name in enumerate(self._modules_to_load):
             self.progress_updated.emit((i+1)/total, f"正在加载: {mod_name}")
             try:
-                # 动态导入模块
+    # 动态导入模块
                 module = importlib.import_module(mod_name)
 
                 found_in_module = False
@@ -185,6 +196,24 @@ class PluginLoaderWorker(QObject):
                         
                         if is_sub and not is_self:
                             logger.info(f"  发现插件类 '{item_name}'")
+                            
+                            # [Sanitizing] 在实例化之前，确保所有公共方法都是 Slot
+                            from emote_widget.utils.proxy import wrap_as_qml_slot
+                            import inspect
+                            
+                            for member_name, member in inspect.getmembers(item):
+                                if not member_name.startswith("_") and callable(member):
+                                    # 跳过已经有 Slot 标记的
+                                    # 注意：必须同时检查 __pyside_signals__ 和 _slots (PySide6 特性)
+                                    if getattr(member, "__pyside_signals__", None) or getattr(member, "_slots", None):
+                                        continue
+                                        
+                                    # 包装并替换
+                                    # 注意：我们是在类定义上修改，所以这会影响所有实例
+                                    wrapped = wrap_as_qml_slot(member)
+                                    setattr(item, member_name, wrapped)
+                                    # logger.debug(f"    已自动修补 Slot: {member_name}")
+
                             # 实例化插件
                             instance = item()
                             # 自动注入专属 Logger，方便插件开发者调试
