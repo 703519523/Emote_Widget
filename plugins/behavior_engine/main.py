@@ -1,137 +1,126 @@
-from typing import Dict, Sequence, TYPE_CHECKING, Optional
+from typing import Dict, List, Sequence, TYPE_CHECKING, Optional, Any
 from PySide6.QtCore import QObject, QTimer, Slot
 from emote_widget.core.plugin_interface import IEmotePlugin
 import random
 import time
-from enum import Enum, auto
+import json
+import os
+from .noise_utils import EmotionalWalker
 
 if TYPE_CHECKING:
     from emote_widget.core.controller import EmoteController
     import logging
 
 # ==========================================
-# 1. 状态定义 (State Definitions)
+# 默认配置 (Fallback Configuration)
 # ==========================================
-class State(Enum):
-    IDLE = auto()       # 待机
-    MICRO_MOVE = auto() # 微动作
-    GAZE = auto()       # 注视/跟随
-    EMOTION = auto()    # 情感表达
-    TIRED = auto()      # 疲劳
-
-# ==========================================
-# 2. 配置数据 (Configuration)
-# ==========================================
-
-BASE_TRANSITION_MATRIX = {
-    State.IDLE:       {State.IDLE: 80, State.MICRO_MOVE: 10, State.GAZE: 5, State.EMOTION: 5, State.TIRED: 0},
-    State.MICRO_MOVE: {State.IDLE: 60, State.MICRO_MOVE: 20, State.GAZE: 10, State.EMOTION: 5, State.TIRED: 5},
-    State.GAZE:       {State.IDLE: 50, State.MICRO_MOVE: 10, State.GAZE: 30, State.EMOTION: 10, State.TIRED: 0},
-    State.EMOTION:    {State.IDLE: 70, State.MICRO_MOVE: 10, State.GAZE: 10, State.EMOTION: 10, State.TIRED: 0},
-    State.TIRED:      {State.IDLE: 40, State.MICRO_MOVE: 0,  State.GAZE: 0,  State.EMOTION: 0,  State.TIRED: 60},
-}
-
-# -----------------------------------------------------------------------------
-# 分层动画配置 (Layered Animation Configuration)
-# -----------------------------------------------------------------------------
-# Layer 0 (Main): 基础状态 (Base)
-# Layer 1 (Diff Slot 1): 身体循环 (Body Loop) - 持续动作
-# Layer 2 (Diff Slot 2): 表情/微动作 (Face/Action) - 短暂动作
-
-# 身体循环列表 (用于 IDLE 和大多数状态的底层律动)
-BODY_LOOPS = [
-    '待機ループ00', '待機ループ01', '待機ループ02',
-    '差分用_waiting_loop', '差分用_waiting_loop2', '差分用_waiting_loop3'
-]
-
-# 状态分层配置
-# 每个状态定义其在各个层级上的候选动画列表
-# 使用 Sequence[Optional[str]] 以允许 list[str] (协变)
-STATE_LAYERS_CONFIG: Dict[State, Dict[str, Sequence[Optional[str]]]] = {
-    State.IDLE: {
-        "main": ['平常'],
-        "layer1": BODY_LOOPS,  # 保持身体律动
-        "layer2": [None]       # 清空表情层
+DEFAULT_CONFIG = {
+    "system": {
+        "heartbeat_interval_ms": 100,
+        "decision_interval_min_s": 2.0,
+        "decision_interval_max_s": 5.0,
+        "idle_threshold_s": 30.0
     },
-    State.MICRO_MOVE: {
-        "main": ['平常'],
-        "layer1": BODY_LOOPS,  # 保持身体律动
-        "layer2": [
-            'うん', 'うんうん', 'ok',           # 点头/肯定
-            'いやいや', 'いやいや2',             # 摇头/否定
-            '首横振り', '耳動かす',             # 原始微动作
-            '右向き', '左向き', '仰ぎ',         # 头部动作
-            'sample_00', 'sample_01'            # 其他微动
-        ]
+    "emotional_walker": {
+        "speed": 0.2,
+        "smooth_factor": 0.95,
+        "decay_rate": 0.05
     },
-    State.GAZE: {
-        "main": ['平常'],
-        "layer1": BODY_LOOPS,
-        "layer2": ['疑問', '戸惑い', '真顔', 'じとー'] # 配合眼神跟随的表情
+    "interaction": {
+        "click": {
+            "arousal_impulse": 0.8,
+            "valence_impulse_positive_min": 0.2,
+            "valence_impulse_positive_max": 0.8,
+            "valence_impulse_neutral_range": 0.2,
+            "positive_prob": 0.7
+        },
+        "hover": {
+            "arousal_boost": 0.05,
+            "valence_boost": 0.05
+        }
     },
-    State.EMOTION: {
-        "main": ['平常'],
-        "layer1": BODY_LOOPS,
-        "layer2": [
-            'にっこり', 'にっこり2', '笑い',    # 开心
-            'わくわく', 'ごきげん', 'ぶりっこ',  # 兴奋/可爱
-            'びっくり1', 'びっくり2',           # 惊讶
-            'はじらい', 'はじらい2',            # 害羞
-            'ぷんぷん',                        # 生气
-        ]
+    "body_loops": [
+        "待機ループ00", "待機ループ01", "待機ループ02",
+        "差分用_waiting_loop", "差分用_waiting_loop2", "差分用_waiting_loop3"
+    ],
+    "animation_pool": {
+        "nod": ["うん", "うんうん", "ok"],
+        "shake": ["いやいや", "いやいや2", "首横振り"],
+        "happy": ["にっこり", "にっこり2", "笑い"],
+        "excited": ["わくわく", "ごきげん", "ぶりっこ"],
+        "surprised": ["びっくり1", "びっくり2", "右向き", "左向き"],
+        "shy": ["はじらい", "はじらい2"],
+        "angry": ["ぷんぷん"],
+        "sigh": ["ためいき", "がっかり"],
+        "sad": ["うつむき", "悩み", "哀しい00"],
+        "tired": ["ひく", "わなわな"],
+        "gaze": ["疑問", "戸惑い", "真顔", "じとー"]
     },
-    State.TIRED: {
-        "main": ['平常'],
-        "layer1": BODY_LOOPS,
-        "layer2": [
-            'ためいき', 'がっかり',             # 叹气
-            'うつむき', '悩み',                 # 低头
-            'ひく', 'わなわな',                 # 负面
-            '哀しい00'                         # 原始负面
-        ]
+    "mapping_thresholds": {
+        "arousal_low": -0.4,
+        "arousal_high": 0.4,
+        "valence_positive": 0.3,
+        "valence_negative": -0.3,
+        "gaze_min_arousal": -0.2,
+        "gaze_min_valence": -0.5
+    },
+    "probabilities": {
+        "layer1_switch_prob": 0.2,
+        "layer2_none_prob": 0.5
     }
 }
 
-DIALOG_LINES = {
-    State.IDLE: ["发呆中...", "今天天气真好", "嗯...", "（放空）"],
-    State.MICRO_MOVE: ["动动脖子", "伸个懒腰", "活动一下"],
-    State.GAZE: ["你在看我吗？", "盯——", "怎么了？", "嗯？"],
-    State.EMOTION: ["嘿嘿", "好开心！", "啦啦啦~", "心情不错"],
-    State.TIRED: ["好累啊...", "想睡觉了", "哈欠...", "Zzz..."],
-}
+# 动作标签常量 (保持不变，用于代码引用)
+TAG_NOD = 'nod'
+TAG_SHAKE = 'shake'
+TAG_HAPPY = 'happy'
+TAG_EXCITED = 'excited'
+TAG_SURPRISED = 'surprised'
+TAG_SHY = 'shy'
+TAG_ANGRY = 'angry'
+TAG_SIGH = 'sigh'
+TAG_SAD = 'sad'
+TAG_TIRED = 'tired'
+TAG_GAZE = 'gaze'
 
 # ==========================================
-# 3. 工作线程 (Worker)
+# 核心逻辑 (Behavior Worker)
 # ==========================================
 class BehaviorWorker(QObject):
     """
-    负责处理 Qt 信号和定时器的 Worker 类。
+    基于情感空间游走的自主行为逻辑。
     """
     
-    def __init__(self, plugin: "BehaviorEnginePlugin"):
+    def __init__(self, plugin: "BehaviorEnginePlugin", config: Dict[str, Any]):
         super().__init__()
         self.plugin = plugin
+        self.config = config
         
-        self.current_state = State.IDLE
+        # 情感游走器
+        self.walker = EmotionalWalker()
+        self.current_valence = 0.0 # -1.0 ~ 1.0 (负面 -> 正面)
+        self.current_arousal = 0.0 # -1.0 ~ 1.0 (低能 -> 高能)
+        
         self.last_interaction_time = time.time()
-        self.last_hover_time = 0.0
+        self.last_update_time = time.time()
         
-        # 记录当前播放的动画，避免重复播放
+        # 状态记忆
         self._current_main_anim: Optional[str] = None
         self._current_layer1_anim: Optional[str] = None
         self._current_layer2_anim: Optional[str] = None
         
         # 心跳计时器
+        interval = self.config["system"]["heartbeat_interval_ms"]
         self.heartbeat_timer = QTimer(self)
-        self.heartbeat_timer.setSingleShot(True)
         self.heartbeat_timer.timeout.connect(self._on_heartbeat)
         
         # 连接信号
         self.controller.on_character_clicked.connect(self._on_clicked)
         self.controller.on_character_hovered.connect(self._on_hovered)
         
-        # 启动
-        self._schedule_next_heartbeat()
+        # 启动心跳
+        self.heartbeat_timer.start(interval) 
+        self._next_decision_time = time.time() + self.config["system"]["decision_interval_min_s"]
 
     @property
     def controller(self) -> "EmoteController":
@@ -150,167 +139,152 @@ class BehaviorWorker(QObject):
         except Exception:
             pass
 
-    def _schedule_next_heartbeat(self):
-        interval = random.randint(2000, 5000)
-        self.heartbeat_timer.start(interval)
-
     @Slot()
     def _on_heartbeat(self):
-        next_state = self._decide_next_state()
-        self._transition_to(next_state)
-        self._schedule_next_heartbeat()
-
-    def _decide_next_state(self) -> State:
-        base_weights = BASE_TRANSITION_MATRIX.get(self.current_state, BASE_TRANSITION_MATRIX[State.IDLE])
-        weights = base_weights.copy()
-        
         now = time.time()
+        dt = now - self.last_update_time
+        self.last_update_time = now
         
-        if now - self.last_interaction_time > 30:
-            weights[State.TIRED] = weights.get(State.TIRED, 0) + 100
-            
-        if now - self.last_hover_time < 2.0:
-            weights[State.GAZE] = weights.get(State.GAZE, 0) + 200
-            
-        states = list(weights.keys())
-        weight_values = list(weights.values())
+        # 1. 步进情感空间
+        walker_cfg = self.config["emotional_walker"]
         
-        try:
-            return random.choices(states, weights=weight_values, k=1)[0]
-        except (IndexError, ValueError):
-            return State.IDLE
+        # 如果很久没交互，Arousal 会倾向于降低
+        idle_threshold = self.config["system"]["idle_threshold_s"]
+        decay_rate = walker_cfg["decay_rate"]
+        
+        idle_duration = now - self.last_interaction_time
+        if idle_duration > idle_threshold:
+            self.current_arousal -= decay_rate * dt
+        
+        # 获取噪声增量
+        delta_v, delta_a = self.walker.step(dt, speed=walker_cfg["speed"])
+        
+        # 混合噪声和当前值 (平滑)
+        smooth = walker_cfg["smooth_factor"]
+        self.current_valence = self.current_valence * smooth + delta_v * (1 - smooth)
+        self.current_arousal = self.current_arousal * smooth + delta_a * (1 - smooth)
+        
+        # 钳制范围
+        self.current_valence = max(-1.0, min(1.0, self.current_valence))
+        self.current_arousal = max(-1.0, min(1.0, self.current_arousal))
+        
+        # 2. 决策动作
+        if now >= self._next_decision_time:
+            self._make_decision()
+            # 下次决策时间随机浮动
+            min_s = self.config["system"]["decision_interval_min_s"]
+            max_s = self.config["system"]["decision_interval_max_s"]
+            self._next_decision_time = now + random.uniform(min_s, max_s)
 
-    def _transition_to(self, new_state: State):
-        prev_state = self.current_state
-        self.current_state = new_state
+    def _make_decision(self):
+        """
+        根据当前 (Valence, Arousal) 坐标决定动作。
+        """
+        v = self.current_valence
+        a = self.current_arousal
         
         if self.logger:
-            self.logger.debug(f"State Transition: {prev_state.name} -> {new_state.name}")
-        
-        # Gaze Control Logic
-        if prev_state == State.GAZE and new_state != State.GAZE:
-            self.controller.enable_gaze_control(False)
-        elif new_state == State.GAZE:
-            self.controller.enable_gaze_control(True)
-            
-        # Execute Layered Animation
-        self._execute_layered_animation(new_state)
-        
-        # Dialog Logic
-        if random.random() < 0.2:
-            self._try_show_dialog(new_state)
+            self.logger.debug(f"Decision Tick: V={v:.2f}, A={a:.2f}")
 
-    def _execute_layered_animation(self, state: State):
-        """
-        根据状态配置，分层播放动画。
-        智能跳过未变化的层级，实现平滑过渡。
-        """
-        config = STATE_LAYERS_CONFIG.get(state)
-        if not config:
-            return
-
-        # 1. Main Layer (Layer 0)
-        main_candidates = config.get("main", [])
-        if main_candidates:
-            # Filter out None from main candidates as play doesn't accept None
-            valid_main = [m for m in main_candidates if m is not None]
-            if valid_main:
-                target_main = random.choice(valid_main)
-                if target_main != self._current_main_anim:
-                    self.controller.play(target_main)
-                    self._current_main_anim = target_main
-                    if self.logger: self.logger.debug(f"  [Main] -> {target_main}")
+        # 获取配置
+        body_loops = self.config["body_loops"]
+        anim_pool = self.config["animation_pool"]
+        thresholds = self.config["mapping_thresholds"]
+        probs = self.config["probabilities"]
         
-        # 2. Body Loop Layer (Layer 1 - Slot 1)
-        # 策略：如果目标包含当前正在播放的 loop，则大概率保持不变，实现无缝衔接
-        # 除非是 IDLE 状态下为了丰富性而随机切换
-        layer1_candidates = config.get("layer1", [])
-        target_layer1 = None
+        # --- 基础层 (Main) ---
+        if self._current_main_anim != '平常':
+            self.controller.play('平常')
+            self._current_main_anim = '平常'
+            
+        # --- 身体层 (Layer 1) ---
+        if random.random() < probs["layer1_switch_prob"]:
+            if body_loops:
+                target_loop = random.choice(body_loops)
+                if target_loop != self._current_layer1_anim:
+                    self.controller.set_diff_timeline(1, target_loop)
+                    self._current_layer1_anim = target_loop
+                
+        # --- 表情/动作层 (Layer 2) ---
+        target_tags: List[Optional[str]] = []
         
-        if layer1_candidates:
-            # 基础切换概率 5%
-            switch_prob = 0.05
+        if a < thresholds["arousal_low"]: # 低唤醒
+            target_tags.append(TAG_TIRED)
+            target_tags.append(TAG_SIGH)
+            if v < thresholds["valence_negative"]: target_tags.append(TAG_SAD)
             
-            # 如果是 IDLE 状态，大幅提高身体律动的切换概率 (例如 30%)
-            # 让角色在发呆时也会偶尔换个站姿，显得更生动
-            if state == State.IDLE:
-                switch_prob = 0.3
+        elif a > thresholds["arousal_high"]: # 高唤醒
+            if v > thresholds["valence_positive"]: # 正面
+                target_tags.append(TAG_HAPPY)
+                target_tags.append(TAG_EXCITED)
+            elif v < thresholds["valence_negative"]: # 负面
+                target_tags.append(TAG_ANGRY)
+                target_tags.append(TAG_SHAKE)
+            else: # 中性
+                target_tags.append(TAG_SURPRISED)
+                
+        else: # 中等唤醒
+            target_tags.append(TAG_NOD)
+            target_tags.append(TAG_GAZE)
+            if v > 0.5: target_tags.append(TAG_HAPPY)
+            if random.random() < probs["layer2_none_prob"]: target_tags.append(None)
             
-            force_change = (random.random() < switch_prob)
-            
-            # Remove None from candidates for comparison
-            valid_candidates = [c for c in layer1_candidates if c is not None]
-            
-            if self._current_layer1_anim in valid_candidates and not force_change:
-                target_layer1 = self._current_layer1_anim # Keep current
-            elif valid_candidates:
-                target_layer1 = random.choice(valid_candidates)
-        else:
-            target_layer1 = None # Clear
-
-        if target_layer1 != self._current_layer1_anim:
-            if target_layer1:
-                self.controller.set_diff_timeline(1, target_layer1)
+        # 执行 Layer 2
+        if target_tags:
+            chosen_tag = random.choice(target_tags)
+            if chosen_tag is None:
+                if self._current_layer2_anim is not None:
+                    self.controller.set_diff_timeline(2, "")
+                    self._current_layer2_anim = None
             else:
-                self.controller.set_diff_timeline(1, "") # Clear
-            self._current_layer1_anim = target_layer1
-            if self.logger: self.logger.debug(f"  [Layer1] -> {target_layer1}")
+                candidates = anim_pool.get(chosen_tag, [])
+                if candidates:
+                    anim = random.choice(candidates)
+                    self.controller.set_diff_timeline(2, anim)
+                    self._current_layer2_anim = anim
+                    
+                    if self.logger:
+                        self.logger.debug(f"Action: {chosen_tag} ({anim}) [V={v:.2f}, A={a:.2f}]")
+                        
+        # 视线控制联动
+        should_gaze = (a > thresholds["gaze_min_arousal"] and v > thresholds["gaze_min_valence"])
+        self.controller.enable_gaze_control(should_gaze)
 
-        # 3. Face/Action Layer (Layer 2 - Slot 2)
-        # 策略：表情层通常是瞬态的，每次都重新触发
-        layer2_candidates = config.get("layer2", [])
-        target_layer2 = None
-        
-        if layer2_candidates:
-            target_layer2 = random.choice(layer2_candidates)
-        
-        # 即使是 None 也要执行，意味着清空表情
-        if target_layer2 != self._current_layer2_anim or target_layer2 is not None:
-             if target_layer2:
-                 self.controller.set_diff_timeline(2, target_layer2)
-             else:
-                 # 只有当之前有表情时才清空，避免频繁调用清空
-                 if self._current_layer2_anim is not None:
-                     self.controller.set_diff_timeline(2, "")
-             
-             self._current_layer2_anim = target_layer2
-             if self.logger: self.logger.debug(f"  [Layer2] -> {target_layer2}")
-
-
-    def _try_show_dialog(self, state: State):
-        lines = DIALOG_LINES.get(state, [])
-        if lines:
-            text = random.choice(lines)
-            self.controller.show_dialog(text)
 
     @Slot()
     def _on_clicked(self):
+        """点击产生激烈的冲量"""
         self.last_interaction_time = time.time()
-        if self.logger:
-            self.logger.debug("Interaction: Clicked")
+        
+        cfg = self.config["interaction"]["click"]
+        
+        # 瞬间提升唤醒度
+        self.current_arousal += cfg["arousal_impulse"]
+        
+        # 情绪效价随机变化
+        if random.random() < cfg["positive_prob"]:
+            impulse_v = random.uniform(cfg["valence_impulse_positive_min"], cfg["valence_impulse_positive_max"])
+        else:
+            rng = cfg["valence_impulse_neutral_range"]
+            impulse_v = random.uniform(-rng, rng)
             
-        # 点击交互逻辑：
-        # 1. 立即打断当前状态，强制进入互动状态
-        # 2. 70% 概率开心 (EMOTION)，30% 概率微动作 (MICRO_MOVE)
-        # 3. 如果当前已经是 EMOTION，则尝试切换到不同的 EMOTION 动作
+        self.current_valence += impulse_v
         
-        target_state = State.EMOTION if random.random() < 0.7 else State.MICRO_MOVE
+        # 立即触发决策
+        self._make_decision()
         
-        # 强制重置心跳计时器，立即执行一次决策
-        self.heartbeat_timer.stop()
-        
-        # 直接执行状态转移，跳过 _decide_next_state 的常规逻辑
-        self.current_state = target_state
-        self._transition_to(target_state)
-        
-        # 重新启动心跳（延迟一点，给互动动画留出时间）
-        interval = random.randint(3000, 6000)
-        self.heartbeat_timer.start(interval)
+        if self.logger:
+            self.logger.debug("Interaction: Clicked (Impulse Added)")
 
     @Slot()
     def _on_hovered(self):
+        """悬停产生温和的冲量"""
         self.last_interaction_time = time.time()
-        self.last_hover_time = time.time()
+        cfg = self.config["interaction"]["hover"]
+        
+        self.current_arousal += cfg["arousal_boost"]
+        self.current_valence += cfg["valence_boost"]
+        
         if self.logger:
             self.logger.debug("Interaction: Hovered")
 
@@ -326,25 +300,47 @@ class BehaviorEnginePlugin(IEmotePlugin):
     def __init__(self) -> None:
         super().__init__()
         self.worker: Optional[BehaviorWorker] = None
+        self.config = DEFAULT_CONFIG
 
     def get_name(self) -> str:
         return "behavior_engine"
 
     def get_description(self) -> str:
-        return "基于马尔可夫链的分层自主行为引擎。"
+        return "基于柏林噪声和情感空间的自主行为引擎。"
 
     def initialize(self):
+        # 注意: 基类 IEmotePlugin.initialize 是无参的 abstractmethod
+        # self.controller 属性已经在调用此方法前由 EmoteController 注入
+        
+        # 尝试加载配置文件
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    user_config = json.load(f)
+                    # 简单合并 (Deep merge is better but simple update works for top-level keys if structure matches)
+                    # 这里为了安全，我们假设用户配置是完整的，或者只覆盖顶层
+                    # 更好的做法是递归合并，这里简化处理，直接用 DEFAULT 作为底板
+                    # TODO: Implement recursive merge if needed
+                    self.config = user_config
+                if hasattr(self, 'logger'):
+                    self.logger.info(f"已加载配置文件: {config_path}")
+            else:
+                if hasattr(self, 'logger'):
+                    self.logger.warning("未找到 config.json，使用默认配置。")
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"加载配置文件失败: {e}，将使用默认配置。")
+
         # 实例化 Worker 并保留引用
-        # 将插件自身传递给 Worker，确保 Worker 始终访问最新的 controller 引用 (从 SandboxProxy 到 RealController)
-        self.worker = BehaviorWorker(self)
+        self.worker = BehaviorWorker(self, self.config)
         
         if hasattr(self, 'logger'):
-            self.logger.info("Behavior Engine Plugin initialized (Layered Animation Mode).")
+            self.logger.info("Behavior Engine Plugin initialized (Noise Driven Mode).")
 
     def cleanup(self):
         if self.worker:
             self.worker.cleanup()
             self.worker = None
-            
         if hasattr(self, 'logger'):
             self.logger.info("Behavior Engine Plugin cleaned up.")

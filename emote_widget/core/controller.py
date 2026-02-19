@@ -200,6 +200,7 @@ class EmoteController(QObject):
         self._bridge.player_ready_signal.connect(self._on_player_ready_handler)
         self._bridge.query_result_signal.connect(self._handle_query_result)
         self._bridge.render_mask_updated_signal.connect(self._handle_render_mask_update)
+        self._bridge.render_mask_binary_signal.connect(self._handle_render_mask_binary)
 
         # 任务调度器
         self.task_dispatcher = EmoteTaskDispatcher()
@@ -209,22 +210,108 @@ class EmoteController(QObject):
         # 将桥接对象注入到 JS 环境中，对象名为 "py_api"
         self.view_adapter.register_python_bridge(self._bridge, "py_api")
 
+    @Slot(object)
+    def _handle_render_mask_binary(self, data: Any) -> None:
+        """
+        处理来自 JS 的二进制掩码数据 (Int16 序列)。
+        
+        格式: [x1, y1, x2, y2, x1, y1, x2, y2, ...]
+        
+        Args:
+            data: QByteArray, bytes, or buffer-like object.
+        """
+        if not self._is_window_transparent or not self._is_click_through_enabled:
+            return
+            
+        try:
+            # DEBUG LOGGING
+            # logger.info(f"Binary Mask Received. Type: {type(data)}")
+
+            arr: NDArray[np.int16]
+
+            if isinstance(data, list):
+                 # 如果是 Int16 列表 (WebChannel 自动转换)
+                 # logger.info(f"Processing as list, length: {len(data)}")
+                 arr = np.array(data, dtype=np.int16).reshape(-1, 4)
+            else:
+                # 使用 Any 以规避 Pylance 对 memoryview[Unknown] 的严格检查
+                buf: Any = None
+                
+                try:
+                    # 优先尝试转换为 memoryview (支持 bytes, bytearray, QByteArray, etc)
+                    buf = memoryview(data)
+                except TypeError:
+                    # 回退策略: 尝试调用 .data() (针对旧版 Qt 绑定或特殊对象)
+                    if hasattr(data, 'data') and callable(getattr(data, 'data')):
+                        try:
+                            buf = memoryview(data.data())
+                        except TypeError:
+                            pass
+                
+                if buf is None:
+                    # logger.warning(f"Could not convert data to memoryview. Type: {type(data)}")
+                    return
+
+                # 长度检查 (每个矩形 4 个 int16 = 8 bytes)
+                if len(buf) % 8 != 0:
+                    logger.warning(f"Mask binary data length mismatch: {len(buf)} (not multiple of 8)")
+                    return
+
+                # Zero-copy parsing with numpy
+                arr = np.frombuffer(buf, dtype=np.int16).reshape(-1, 4)
+
+            # 计算 [x, y, w, h]
+            # w = x2 - x1
+            # h = y2 - y1
+            
+            # 使用 numpy 批量运算
+            # 注意: arr shape is (N, 4), columns are x1, y1, x2, y2
+            x = arr[:, 0]
+            y = arr[:, 1]
+            w = arr[:, 2] - arr[:, 0]
+            h = arr[:, 3] - arr[:, 1]
+            
+            # Stack and convert to list: [[x, y, w, h], ...]
+            # column_stack returns (N, 4) array
+            rects = np.column_stack((x, y, w, h)).tolist()
+            
+            # DEBUG
+            # if len(rects) > 0:
+            #    logger.info(f"Parsed {len(rects)} rects. First: {rects[0]}")
+            
+            # 发射可视化信号 (list, w, h)
+            # 这里的 w, h 指的是 Canvas 的宽高，但在二进制协议中没有传 Canvas 宽高
+            # 我们可以保留上次的宽高，或者暂时传 0，或者修改协议。
+            # 鉴于可视化主要用于调试，且 Canvas 大小改变频率极低，可以接受暂缺失或使用缓存。
+            # 为了严谨，我们可以在 binary 协议头部加 4 bytes (2 int16) 表示 w, h，
+            # 但 Task 描述只说了 "格式: [x1, y1, x2, y2, ...]"。
+            # 我们先传 0, 0 或上次的值。
+            # 实际上 render_mask_visual_data 信号主要给调试 Widget 用。
+            
+            # 尝试从 config 或 adapter 获取当前尺寸
+            # 或者暂且不改动 binary 协议，只传 rects。
+            # 调试组件可能需要 w, h 来绘制背景边界。
+            
+            self.render_mask_visual_data.emit(rects, 0, 0)
+            
+            if hasattr(self.view_adapter, 'set_render_mask'):
+                self.view_adapter.set_render_mask(rects)
+                
+        except Exception as e:
+            logger.error(f"处理二进制掩码失败: {e}", exc_info=False)
+
     @Slot(str)
     def _handle_render_mask_update(self, mask_json: str) -> None:
         """
-        处理来自 JS 的渲染掩码数据，并将其传递给 View Adapter 以应用窗口异形遮罩。
+        [Deprecated] 处理来自 JS 的渲染掩码数据 (JSON Legacy 模式)。
         
-        内部逻辑:
-            1. JS 端的 MaskSampler 算法计算出当前帧非透明区域的矩形集合。
-            2. 通过 Bridge 发送 JSON 字符串到此函数。
-            3. 此函数解析 JSON，提取 rects 列表。
-            4. 将 rects 传递给 Qt 层的 setMask 或 setRegion，实现点击穿透。
+        此方法仅作为 fallback 保留。
         
         Args:
             mask_json (str): 包含 rects, width, height 的 JSON 字符串。
         """
         if not self._is_window_transparent or not self._is_click_through_enabled:
-            return # 非透明或非穿透模式不需要应用 Mask
+            return 
             
         try:
             payload: Any = json.loads(mask_json)
@@ -233,7 +320,6 @@ class EmoteController(QObject):
             width: int = 0
             height: int = 0
 
-            # 兼容旧格式（纯列表）和新格式（对象）
             if isinstance(payload, list):
                 rects = cast(List[Any], payload)
             elif isinstance(payload, dict):
@@ -242,7 +328,6 @@ class EmoteController(QObject):
                 width = int(payload_dict.get('width', 0))
                 height = int(payload_dict.get('height', 0))
                 
-            # 发射用于 MaskMonitorWidget 的可视化数据
             self.render_mask_visual_data.emit(rects, width, height)
             
             if hasattr(self.view_adapter, 'set_render_mask'):

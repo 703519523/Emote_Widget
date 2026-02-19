@@ -11,7 +11,8 @@ EmoteWidget Python API 桥接模块。
     - **数据传输**: 接收高频的 Mask 数据（用于点击穿透）。
 """
 
-from typing import Optional, List
+import warnings
+from typing import Optional, List, Any
 from PySide6.QtCore import QObject, Signal, Slot
 from emote_widget.utils.logger import emote_widget_logger as logger
 
@@ -42,6 +43,12 @@ class PythonApiBridge(QObject):
 
     render_mask_updated_signal = Signal(str)
     """渲染掩码更新信号。参数: (mask_data_json: str)"""
+
+    render_mask_binary_signal = Signal(object)
+    """
+    渲染掩码二进制更新信号。
+    参数: (data: QByteArray/bytes) - 包含 Int16 序列 [x1, y1, x2, y2, ...]
+    """
 
     def __init__(self, controller: Optional[QObject] = None) -> None:
         """
@@ -104,12 +111,24 @@ class PythonApiBridge(QObject):
     @Slot(str)
     def receive_render_mask(self, mask_json: str) -> None:
         """
-        [JS调用] 接收高频的渲染区域掩码数据。
+        [Deprecated] [JS调用] 接收高频的渲染区域掩码数据 (JSON 格式)。
         
-        用于实现点击穿透功能。此方法会被 JS 端的 `MaskSampler` 定期调用。
+        **已废弃**: 请使用 `receive_render_mask_binary` 以获得更好的性能。
+        此方法保留仅为了向后兼容旧版前端代码。
         
         Args:
             mask_json (str): 包含 rects 列表的 JSON 字符串。
         """
+        # warnings.warn("receive_render_mask is deprecated. Use receive_render_mask_binary instead.", DeprecationWarning, stacklevel=2)
         # 极高频调用，默认不记录日志
         self.render_mask_updated_signal.emit(mask_json)
+
+    @Slot("QVariant")
+    def receive_render_mask_binary(self, data: Any) -> None:
+        """
+        [JS调用] 接收二进制掩码数据 (Int16 序列)。
+        
+        Args:
+            data (Any): QByteArray 或 bytes 数据。
+        """
+        self.render_mask_binary_signal.emit(data)

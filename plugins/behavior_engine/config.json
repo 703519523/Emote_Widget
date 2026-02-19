@@ -1,0 +1,55 @@
+{
+    "system": {
+        "heartbeat_interval_ms": 100,
+        "decision_interval_min_s": 2.0,
+        "decision_interval_max_s": 5.0,
+        "idle_threshold_s": 30.0
+    },
+    "emotional_walker": {
+        "speed": 0.8,
+        "smooth_factor": 0.95,
+        "decay_rate": 0.05
+    },
+    "interaction": {
+        "click": {
+            "arousal_impulse": 0.8,
+            "valence_impulse_positive_min": 0.2,
+            "valence_impulse_positive_max": 0.8,
+            "valence_impulse_neutral_range": 0.2,
+            "positive_prob": 0.7
+        },
+        "hover": {
+            "arousal_boost": 0.05,
+            "valence_boost": 0.05
+        }
+    },
+    "body_loops": [
+        "待機ループ00", "待機ループ01", "待機ループ02",
+        "差分用_waiting_loop", "差分用_waiting_loop2", "差分用_waiting_loop3"
+    ],
+    "animation_pool": {
+        "nod": ["うん", "うんうん", "ok", "sample_00", "sample_01"],
+        "shake": ["いやいや", "いやいや2", "首横振り"],
+        "happy": ["にっこり", "にっこり2", "笑い"],
+        "excited": ["わくわく", "ごきげん", "ぶりっこ"],
+        "surprised": ["びっくり1", "びっくり2", "右向き", "左向き"],
+        "shy": ["はじらい", "はじらい2"],
+        "angry": ["ぷんぷん"],
+        "sigh": ["ためいき", "がっかり"],
+        "sad": ["うつむき", "悩み", "哀しい00"],
+        "tired": ["ひく", "わなわな"],
+        "gaze": ["疑問", "戸惑い", "真顔", "じとー"]
+    },
+    "mapping_thresholds": {
+        "arousal_low": -0.15,
+        "arousal_high": 0.15,
+        "valence_positive": 0.15,
+        "valence_negative": -0.15,
+        "gaze_min_arousal": -0.2,
+        "gaze_min_valence": -0.5
+    },
+    "probabilities": {
+        "layer1_switch_prob": 0.3,
+        "layer2_none_prob": 0.1
+    }
+}
