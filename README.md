@@ -4,169 +4,210 @@
 
 # EmoteWidget
 
-一个基于 PySide6 的、功能完备的动态角色显示组件，用于加载和控制 [FreeMote (E-mote)](https://github.com/UlyssesWu/FreeMote) (尤其是一些galgame中解包出来的) 模型。它提供了一套高级、纯粹的 Python API，将所有与底层 Web 引擎和 JavaScript 的复杂交互完全封装，让开发者可以轻松地将交互式 2D 角色集成到桌面应用中。
+一个基于 PySide6、Qt WebEngine 和 JavaScript 前端的动态角色显示组件 SDK，用于加载和控制 [FreeMote (E-mote)](https://github.com/UlyssesWu/FreeMote) 模型。
+
+它采用 **Controller-Adapter (控制器-适配器)** 架构，实现了业务逻辑与 UI 框架的彻底解耦。不仅提供开箱即用的 Qt Widgets 组件，还同时支持 **Qt Quick (QML)**，并允许通过插件扩展支持其他 GUI 框架。
 
 <img width="1924" height="1397" alt="image" src="https://github.com/user-attachments/assets/167df9b6-325e-458e-aa48-fd870f5e1bc6" />
 
-
 ## ✨ 核心功能
 
-*   **高级 Python SDK**: 提供简单易用的 Python 方法（如 `play()`, `set_scale()`）来控制角色，无需编写任何 JavaScript。
-*   **智能模型加载**: 自动解包 `.psb` 模型文件，生成并缓存参数映射表 (`.map.json`)，极大简化了模型适配过程。
-*   **强大的动画控制**: 支持主时间轴动画和可叠加的差分动画（如表情），可控制动画速度、平滑过渡，并能随时重置角色状态。
-*   **自适应口型同步**: 内置基于双指数移动平均（Dual EMA）算法的口型同步系统，能够根据实时音频流（或音频文件）自适应音量大小，实现流畅自然的口型动画。
-*   **可扩展插件系统**: 能够自动扫描并加载 `plugins` 目录下的所有插件，方便开发者扩展新功能（如 TTS、AI 对话集成等）。
-*   **丰富的视觉特效**: 支持位置/缩放/旋转变换、全局透明度、灰度、顶点染色、背景图更换等多种视觉效果。
-*   **物理与环境模拟**: 支持调整头发、配件的物理摆动幅度，并可模拟全局风力效果。
-*   **内置交互**: 开箱即用地支持鼠标拖动、滚轮缩放和视线跟随。
-*   **完整的测试平台**: 提供一个功能齐全的图形化测试工具 `Tester.py`，允许用户无需编写代码即可探索和调试大部分功能。
+*   **多框架支持**: 开箱即支持 `QtWidgets` 和 `QtQuick (QML)`，一套逻辑，多端运行。
+*   **Controller-Adapter 架构**: 核心逻辑封装在纯 Python 控制器中，UI 层通过适配器接口交互，结构清晰，极易扩展。
+*   **安全沙箱**: 引入自定义 `emote://` 协议加载本地资源，无需关闭浏览器的安全策略 (CORS)，解决了跨域和资源加载的痛点。
+*   **异步通信机制**: 采用基于 Promise 的 JS-Python 握手流程，杜绝通信时序导致的 Race Condition，加载更稳健。
+*   **高级 Python SDK**: 提供简单易用的 Python 方法（如 `play()`, `set_scale()`）控制角色，无需编写任何 JavaScript。
+*   **自适应口型同步**: 内置基于双指数移动平均（Dual EMA）算法的口型同步线程，支持实时音频流或文件驱动。
+*   **插件化扩展**: 强大的插件系统 (`plugins/`)，支持扩展功能或注册新的 UI 适配器。
+*   **内置交互与特效**: 支持鼠标拖动、视线跟随、透明窗口穿透、背景更换、灰度/染色特效等。
 
 ## 💻 配置要求
 
-*   **操作系统**: Windows 10/11, macOS 11+, 或者 Linux (Ubuntu 20.04+, Arch, etc.)
-*   **Python版本**: 3.10 以及更高
-*   **依赖**: PySide6, 需要支持 Qt WebEngine
+*   **操作系统**: Windows 10/11, macOS 11+, Linux
+*   **Python版本**: 3.10+
+*   **依赖**: 
+    *   `PySide6` (必需)
+    *   `numpy` (用于口型分析)
+    *   `soundfile`, `sounddevice` (用于音频播放与流处理)
+    *   `lz4` (用于读取 LZ4 Frame 包装的 PSB)
 
-## 🚀 快速开始：使用测试平台
+## 🧭 先了解当前架构
 
-项目附带一个强大的交互式测试平台 `Tester.py`，是了解和调试所有功能的最佳方式。
+项目当前的正式架构说明见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，其中区分了 Qt Widgets 和 QML 两条真实调用链、Controller/Adapter 边界、Python-JavaScript 通信以及插件生命周期。
 
-**1. 准备环境**
+`walkthrough.md` 是项目审查记录，适合了解重构背景和已发现的问题；它不是严格的 API 文档。
 
-确保你已安装所需的 Python 库：
+## 🚀 快速开始：运行测试平台
+
+当前仓库提供了两个独立的测试入口（位于 `testers/` 目录）：`test_qt.py` 和 `test_qml.py`。
+
+**1. 安装依赖**
 ```bash
-pip install PySide6 numpy soundfile sounddevice
+pip install -r requirements.txt
 ```
 
-**2. 运行测试平台**
-
-直接运行 `Tester.py` 文件：
+**2. 运行测试**
 ```bash
-python Tester.py
+python testers/test_qt.py
 ```
 
-**3. 探索功能**
+Qt 测试平台包含：
+*   **UI 交互**: 实时调整变换、动画、物理参数。
+*   **参数绑定调试**: 查看模型内部变量，实时修改绑定并保存到缓存。
+*   **插件管理**: 查看已加载插件及其 UI。
+*   **嵌入式终端**: 内置 Python 控制台，方便直接调用 `controller` 进行调试。
 
-测试平台 (`run_tests.py`) 提供了一个功能完备的带标签页界面，包含以下模块：
+QML 测试平台：
 
-*   **⚙️ 基本**: 动态加载和切换不同的 `.psb` 模型和背景图片，支持一键透明化窗口。
-*   **↔️ 变换/🎬 动画/🎨 外观/💨 物理**: 通过滑块实时控制角色的缩放、旋转、动画速度、透明度、物理摆动和风力等。
-*   **🔬 绑定**: 实时查看运行时自省获取的变量绑定，支持调整参数范围、分类和特殊用途标签，并可将修改**保存到缓存**。
-*   **🖱️ 交互**: 测试鼠标拖动、滚轮缩放、视线跟随，以及从 `.wav` 文件启动的口型同步。
-*   **💡 高级**: 测试差分动画、对话框系统，并能查询模型内部的详细数据。
-*   **🧩 插件**: 查看所有已加载的插件，并与其自定义 UI 进行交互。
-*   **💻 终端**: 内置交互式 Python 控制台，支持**代码自动补全**、历史记录和实时对象检查，方便开发者进行深度调试。
+```bash
+python testers/test_qml.py
+```
+
+QML 界面资源位于 `qml_tester/qml/`，Python 侧后端对象是 `EmoteWidgetQml`。
 
 ---
 
-### ⚠️ 关于项目开发的说明 (A Note on Development)
+## 👨‍💻 集成指南 (Integration)
 
-这个项目是在一名独立开发者在三个多星期的时间内，从概念构思到功能完备的快速迭代成果。
+### 场景 1: 使用 PySide6 Widgets (经典模式)
 
-为了实现如此高的开发效率，本项目在开发过程中大量借助了 **AI 辅助编程工具**。其中，Python 后端代码的格式化、部分通用功能的实现，以及**全部的前端 HTML/JavaScript 代码**，均由 AI 生成初始框架，再进行逻辑修复、功能整合和最终调试。
-
-**重点：**
-*   **后端优先**: 本项目的核心与重心在于提供一个功能强大、API 友好的 **Python SDK (`EmoteWidget`)**。
-*   **前端作为功能演示**: 由于我并非一名前端开发者，配套的 `pyside_webview.html` 及其 JavaScript 代码应被视为一个**功能性的实现原型 (Proof-of-Concept)**。它能够完整地驱动模型并展示所有功能，但在代码结构上可能较为粗糙（例如，存在较多全局变量），并可能包含一些未知的边界情况或错误。
-
-我选择公开这些信息，是为了让所有使用者和潜在的贡献者对项目的现状有一个清晰的认识。非常欢迎任何形式的贡献，特别是对于前端代码的重构、优化和改进！
-
----
-
-## 👨‍💻 在你的项目中使用 (Programmatic Usage)
-
-如果你想将 `EmoteWidget` 集成到你自己的 PySide6 应用中，用法也非常简单。
+最简单的用法，使用封装好的 `EmoteWidget` 类。
 
 ```python
 import sys
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication
+# 直接导入封装好的 Widget
 from emote_widget import EmoteWidget
 
-class MyApp(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("My App with EmoteWidget")
-        self.resize(800, 600)
+app = QApplication(sys.argv)
 
-        # 1. 实例化 EmoteWidget
-        self.emote_widget = EmoteWidget(self)
-        self.setCentralWidget(self.emote_widget)
+# 1. 实例化
+widget = EmoteWidget()
+widget.show()
 
-        # 2. 连接信号，在网页和模型准备好后执行操作
-        self.emote_widget.load_finished.connect(self.on_page_loaded)
-        self.emote_widget.player_ready.connect(self.on_player_ready)
+# 2. 加载模型（LZ4/MDF 会自动脱壳；Win/RGBA8 会适配为 EMS）
+widget.load_model("chara.psb")
 
-    def on_page_loaded(self):
-        """当内部网页加载完毕后，加载一个模型"""
-        print("Page loaded, loading model...")
-        # 模型文件 "chara.psb" 应放置在 "web_frontend/models/" 目录下
-        self.emote_widget.load_model("chara.psb")
+# 3. 监听信号
+widget.player_ready.connect(lambda: widget.play("Hello"))
 
-    def on_player_ready(self, available_animations):
-        """当模型准备就绪后，控制角色行为"""
-        print(f"Model ready! Animations: {available_animations}")
-        
-        # 3. 调用 API 控制角色
-        self.emote_widget.play("idle_01")
-        self.emote_widget.set_scale(0.8, duration_ms=500)
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MyApp()
-    window.show()
-    sys.exit(app.exec())
+sys.exit(app.exec())
 ```
 
-## 📂 项目结构
+### 场景 2: 使用 Qt Quick / QML
+
+QML 场景建议使用 `EmoteWidgetQml`，由 QML 的 WebEngineView 在完成实例化后绑定到 `targetView`。完整可运行示例请看 `test_qml.py` 和 `qml_tester/qml/`。
+
+**Python 端:**
+```python
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWebEngineQuick import QtWebEngineQuick
+from emote_widget import EmoteWidgetQml
+
+QtWebEngineQuick.initialize() # 必须初始化
+engine = QQmlApplicationEngine()
+engine.load("main.qml")
+
+# 创建 QML 后端对象并注入上下文；QML 组件负责 targetView 和 WebChannel 绑定
+backend = EmoteWidgetQml()
+engine.rootContext().setContextProperty("EmoteBackend", backend)
+```
+
+**QML 端 (`main.qml`):**
+```qml
+import QtQuick 2.15
+import QtWebEngine 1.10
+
+Window {
+    visible: true
+    width: 800; height: 600
+
+    WebEngineView {
+        anchors.fill: parent
+        backgroundColor: "transparent"
+
+        // 具体的 QML 封装、targetView 和 URL 以 qml_tester/qml 中的实现为准
+    }
+}
+```
+
+### 场景 3: 自定义适配器 (高级扩展)
+
+如果你想支持 Tkinter 或 CEF Python，只需编写一个 Adapter 插件。
+
+```python
+# plugins/my_adapter.py
+from emote_widget import AdapterRegistry
+from emote_widget.core.adapter_interface import IViewAdapter
+
+@AdapterRegistry.register("my_driver")
+class MyAdapter(IViewAdapter):
+    def run_javascript(self, script: str):
+        # 实现你的 JS 执行逻辑
+        pass
+    # ... 实现其他接口
+```
+`create_emote_widget()` 是底层 Adapter 工厂，不是 `EmoteWidget` Facade 的替代品。默认 Qt Adapter 需要调用者提供一个已创建的 WebView；如需普通 Qt 集成，优先使用 `EmoteWidget()`。
+
+---
+
+## 📂 项目结构 (New Structure)
+
+重构后的项目采用了标准的 Python Package 结构：
 
 ```
 .
-├── LICENSE                   # 本项目许可协议 (CC BY-NC-SA 4.0)
-├── run_tests.py              # [入口] 功能测试与演示平台 (原 Tester.py)
-├── emote_widget.py           # [核心] 主 SDK 组件 (PySide6 Widget)
-├── bound_params.py           # [核心] 运行时自省与参数智能映射模块
-├── logger_config.py          # 日志配置
-├── requirements.txt          # Python 依赖项列表
+├── requirements.txt          # 依赖列表
+├── LICENSE                   # 许可协议
 │
-├── config/                   # 配置文件目录
-│   └── config.json           # 语义匹配规则配置文件
+├── emote_widget/             # [核心包]
+│   ├── __init__.py           # 包入口，注册协议与工厂函数
+│   │
+│   ├── core/                 # [业务核心] (纯 Python，无 UI 依赖)
+│   │   ├── controller.py     # 核心控制器 (大脑)
+│   │   ├── adapter_interface.py # 适配器接口定义
+│   │   ├── resource_manager.py  # 生命周期管理
+│   │   ├── scheme_handler.py    # 自定义协议与安全处理
+│   │   └── ...
+│   │
+│   ├── ui/                   # [UI 实现]
+│   │   ├── adapters/         # 各种 UI 框架的适配器 (Widget, QML)
+│   │   ├── views/            # 封装好的外观类 (Facade)
+│   │   └── common/           # 通用 UI 组件 (如调试监视器)
+│   │
+│   ├── utils/                # [工具集] (路径解析、日志、音频)
+│   ├── default_config/       # [配置] 默认配置文件
+│   │
+│   └── web_frontend/         # [前端资源] (打包在包内)
+│       ├── pyside_webview.html # 核心 HTML
+│       ├── driver/           # FreeMote JS SDK
+│       ├── models/           # 默认模型目录
+│       └── ...
 │
-├── web_frontend/             # [前端] 存放所有 Web 资源
-│   ├── pyside_webview.html   # 核心 HTML 页面，用于渲染模型
-│   ├── webview.css           # 主样式表 (处理镜像翻转、布局适配)
-│   ├── models/               # 存放 .psb 模型文件 (例如 chara.psb)
-│   ├── driver/               # 核心驱动 (FreeMote JS SDK)
-│   │   ├── emoteplayer.js    # 此为 [Freemote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK) 提供的模型渲染API
-│   │   └── FreeMoteDriver.js # 此为 [Freemote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK) 提供的模型渲染核心
-│   ├── splashscreen/         # 启动画面相关资源 (HTML/CSS/JS)
-│   ├── dialogs/              # 对话框皮肤模板
-│   └── backgrounds/          # 背景图片
-│
-├── plugins/                  # [插件] 扩展插件目录
-│   ├── plugin_interface.py   # 插件接口定义
-│   └── debug_tools/          # [示例] 调试工具插件
-│       └── main.py
-│
-└── .emote_cache/             # [缓存] 自动生成的参数映射缓存 (自动创建)
-
+└── plugins/                  # [用户插件] 用户自定义扩展目录
 ```
 
-## 📜 许可证 (License)
+---
 
-本项目根据 **[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/)** 进行许可。
+## 🧪 其他测试入口
 
-这意味着：
-*   **署名 (BY)**: 你必须在你的项目中致谢本项目及相关依赖。
-*   **非商业性使用 (NC)**: 你的项目**不能**用于任何商业目的。
-*   **相同方式共享 (SA)**: 如果你修改或基于此项目创作了衍生作品，你必须以相同的许可证分发你的作品。
+```bash
+python testers/click_through_test.py
+```
 
-## 🙏 致谢 (Acknowledgements)
+该脚本用于专项检查透明窗口和点击穿透。由于 Qt WebEngine 依赖图形环境，测试脚本应在本地桌面环境中运行。
 
-本项目依赖于以下优秀的开源项目，并因此受到其 `CC BY-NC-SA 4.0` 许可证的约束。
+## ⚠️ 关于开发的说明
 
-*   **[FreeMote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK)**
-    *   **Author**: [Ulysses](https://github.com/UlyssesWu)
-    *   提供了 JavaScript 端的封装接口与 WebGL 渲染支持。
-*   **[FreeMote](https://github.com/UlyssesWu/FreeMote)**
-    *   **Author**: [Ulysses](https://github.com/UlyssesWu)
-    *   提供了核心的 PSB 模型解析与渲染逻辑。
+核心 Python SDK (`EmoteController`) 已完成一轮 Controller-Adapter 重构，但项目仍处于持续整理阶段；请以当前源码、`docs/ARCHITECTURE.md` 和测试入口为准。
+
+前端部分 (`pyside_webview.html` & JS) 主要作为功能实现的载体，虽然功能完备，但仍有优化空间。项目大量使用了 AI 辅助编程来加速开发，特别是前端逻辑和部分样板代码。我们欢迎社区贡献代码，进一步完善前端交互或添加新的 Adapter。
+
+---
+
+## 📜 许可证 & 致谢
+
+本项目基于 **CC BY-NC-SA 4.0** 许可。
+
+特别致谢以下项目：
+*   **[FreeMote-SDK](https://github.com/Project-AZUSA/FreeMote-SDK)** & **[FreeMote](https://github.com/UlyssesWu/FreeMote)** by UlyssesWu

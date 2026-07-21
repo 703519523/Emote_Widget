@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!-- 
+    EmoteWidget Host Page 
+    这是承载 Live2D/Emote 模型的宿主页面，运行在 QWebEngineView 中。
+-->
+<html>
+<head>
+    <title>Zako~Zako~</title>
+    <meta charset="utf-8">
+    
+    <!-- Qt WebChannel: 实现 JS 与 Python 的通信 -->
+    <script src="webchannel/qwebchannel.js"></script>
+    
+    <!-- Emote Player 内存配置 -->
+    <script>
+        // 分配 256MB 内存给 Emote 引擎，防止大型模型崩溃
+        var Module = { TOTAL_MEMORY: 256 * 1024 * 1024 }; 
+    </script>
+    
+    <!-- 启动画面 (Splash Screen) -->
+    <link rel="stylesheet" href="splashscreen/splash_screen.css">
+    <script src="splashscreen/splashscreen.js"></script>
+    
+    <!-- 通用样式 -->
+    <link rel="stylesheet" href="webview.css">
+</head>
+<body>
+    <!-- 背景层: 用于显示纯色或背景图片 -->
+    <div id="bg-div"></div>
+    
+    <!-- 渲染层: WebGL 画布 -->
+    <canvas id="emote-canvas"></canvas>
+    
+    <!-- UI层: 对话框挂载点 -->
+    <div id="dialog-root"></div>
+    
+    <!-- 
+        核心驱动 (Core Drivers) 
+        这些是 E-mote/Live2D 的官方运行时库，必须最先加载。
+    -->
+    <script src="driver/emoteplayer.js"></script>
+    <script src="driver/FreeMoteDriver.js"></script>
+
+    <!-- 
+        逻辑模块 (Modularized Logic)
+        加载顺序非常重要，因为后续模块可能依赖前面的全局对象。
+    -->
+    
+    <!-- 1. 核心渲染器: 负责 EmotePlayer 实例管理和画质控制 -->
+    <script src="js/core_renderer.js"></script>
+    
+    <!-- 2. 交互处理器: 负责鼠标拖拽、视线跟随 -->
+    <script src="js/interaction_handler.js"></script>
+    
+    <!-- 3. 对话框系统: 负责气泡显示和主题加载 -->
+    <script src="js/dialog_system.js"></script>
+    
+    <!-- 4. 遮罩采样器: 负责点击穿透 (Mask) 计算 -->
+    <script src="js/mask_sampler.js"></script>
+    
+    <!-- 5. 桥接管理器: 初始化通信，必须最后加载，因为它会触发 setupEventListeners -->
+    <script src="js/bridge_manager.js"></script> 
+
+</body>
+</html>

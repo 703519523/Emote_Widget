@@ -1,0 +1,72 @@
+flowchart LR
+
+%% =========================
+%% 系统架构区
+%% =========================
+subgraph A[系统架构（Controller-Adapter 变种 MVVM）]
+    direction TB
+
+    Widget["EmoteWidget\n（UI 外观 / Facade）"]
+    Adapter["WidgetAdapter\n（Qt 适配层）"]
+    IAdapter["IViewAdapter\n（接口）"]
+    Controller["EmoteController\n（核心控制器）"]
+    Bridge["PythonApiBridge\n（Python ↔ JS）"]
+    Scheme["EmoteSchemeHandler\n（emote:// 协议）"]
+
+    Widget --> Adapter
+    Widget --> Controller
+    Adapter -. 实现 .-> IAdapter
+    Controller --> IAdapter
+    Controller --> Bridge
+end
+
+%% =========================
+%% 初始化与握手区
+%% =========================
+subgraph B[初始化与握手流程（含 Promise 同步）]
+    direction TB
+
+    B1["Python 启动\n创建 Widget / Adapter / Controller"]
+    B2["注册 emote:// 协议\n注册 WebChannel"]
+    B3["加载 emote://pyside_webview.html"]
+    B4["JS 加载 qwebchannel.js\n建立 QWebChannel"]
+    B5["获取 py_api 成功\nresolve bridgeReadyPromise"]
+    B6["Python 发送 loadNewModel(url)"]
+    B7["JS await bridgeReadyPromise"]
+    B8["JS 初始化 Live2D\n调用 on_player_ready"]
+    B9["Python 收到回调\n清空指令队列"]
+
+    B1 --> B2 --> B3 --> B4 --> B5
+    B6 --> B7 --> B8 --> B9
+    B5 --> B7
+end
+
+%% =========================
+%% 指令队列与执行区
+%% =========================
+subgraph C[指令执行与队列控制]
+    direction TB
+
+    C1["外部调用 API\nset_scale(1.2)"]
+    C2["Controller 生成 JS 字符串"]
+    C3{"Player 是否就绪？"}
+
+    C4["未就绪：\n加入 _command_queue"]
+    C5["已就绪：\n立即执行 JS"]
+
+    C6["收到 on_player_ready 信号"]
+    C7["遍历并执行队列"]
+    C8["清空队列"]
+
+    C1 --> C2 --> C3
+    C3 -- 否 --> C4
+    C3 -- 是 --> C5
+    C6 --> C7 --> C8
+end
+
+%% =========================
+%% 跨区关联
+%% =========================
+Controller -. 控制 .-> B6
+Bridge -. 回调 .-> B9
+B9 -. 触发 .-> C6
