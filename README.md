@@ -4,7 +4,7 @@
 
 # EmoteWidget
 
-一个基于 PySide6 的、功能完备的动态角色显示组件 SDK，用于加载和控制 [FreeMote (E-mote)](https://github.com/UlyssesWu/FreeMote) 模型。
+一个基于 PySide6、Qt WebEngine 和 JavaScript 前端的动态角色显示组件 SDK，用于加载和控制 [FreeMote (E-mote)](https://github.com/UlyssesWu/FreeMote) 模型。
 
 它采用 **Controller-Adapter (控制器-适配器)** 架构，实现了业务逻辑与 UI 框架的彻底解耦。不仅提供开箱即用的 Qt Widgets 组件，还同时支持 **Qt Quick (QML)**，并允许通过插件扩展支持其他 GUI 框架。
 
@@ -29,10 +29,17 @@
     *   `PySide6` (必需)
     *   `numpy` (用于口型分析)
     *   `soundfile`, `sounddevice` (用于音频播放与流处理)
+    *   `lz4` (用于读取 LZ4 Frame 包装的 PSB)
+
+## 🧭 先了解当前架构
+
+项目当前的正式架构说明见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，其中区分了 Qt Widgets 和 QML 两条真实调用链、Controller/Adapter 边界、Python-JavaScript 通信以及插件生命周期。
+
+`walkthrough.md` 是项目审查记录，适合了解重构背景和已发现的问题；它不是严格的 API 文档。
 
 ## 🚀 快速开始：运行测试平台
 
-项目重构后提供了一个全新的 `run_tests.py`，它是了解 SDK 功能的最佳入口。
+当前仓库提供了两个独立的测试入口（位于 `testers/` 目录）：`test_qt.py` 和 `test_qml.py`。
 
 **1. 安装依赖**
 ```bash
@@ -41,14 +48,22 @@ pip install -r requirements.txt
 
 **2. 运行测试**
 ```bash
-python run_tests.py
+python testers/test_qt.py
 ```
 
-测试平台包含：
+Qt 测试平台包含：
 *   **UI 交互**: 实时调整变换、动画、物理参数。
 *   **参数绑定调试**: 查看模型内部变量，实时修改绑定并保存到缓存。
 *   **插件管理**: 查看已加载插件及其 UI。
 *   **嵌入式终端**: 内置 Python 控制台，方便直接调用 `controller` 进行调试。
+
+QML 测试平台：
+
+```bash
+python testers/test_qml.py
+```
+
+QML 界面资源位于 `qml_tester/qml/`，Python 侧后端对象是 `EmoteWidgetQml`。
 
 ---
 
@@ -70,8 +85,7 @@ app = QApplication(sys.argv)
 widget = EmoteWidget()
 widget.show()
 
-# 2. 加载模型 (支持绝对路径或包内相对路径)
-# 默认模型目录: emote_widget/web_frontend/models/
+# 2. 加载模型（LZ4/MDF 会自动脱壳；Win/RGBA8 会适配为 EMS）
 widget.load_model("chara.psb")
 
 # 3. 监听信号
@@ -80,30 +94,23 @@ widget.player_ready.connect(lambda: widget.play("Hello"))
 sys.exit(app.exec())
 ```
 
-### 场景 2: 使用 Qt Quick / QML (高级模式)
+### 场景 2: 使用 Qt Quick / QML
 
-通过 `create_emote_widget` 工厂函数和 `QmlAdapter` 实现。
+QML 场景建议使用 `EmoteWidgetQml`，由 QML 的 WebEngineView 在完成实例化后绑定到 `targetView`。完整可运行示例请看 `test_qml.py` 和 `qml_tester/qml/`。
 
 **Python 端:**
 ```python
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
-from emote_widget import create_emote_widget
+from emote_widget import EmoteWidgetQml
 
 QtWebEngineQuick.initialize() # 必须初始化
 engine = QQmlApplicationEngine()
 engine.load("main.qml")
 
-# 1. 找到 QML 中的 WebEngineView 对象
-root = engine.rootObjects()[0]
-qml_item = root.findChild(object, "emoteView")
-
-# 2. 创建控制器 (指定 adapter="qml")
-# 返回 (ui_handle, controller)
-_, controller = create_emote_widget(adapter_name="qml", qml_item=qml_item)
-
-# 3. 使用 controller 控制逻辑
-controller.load_model("chara.psb")
+# 创建 QML 后端对象并注入上下文；QML 组件负责 targetView 和 WebChannel 绑定
+backend = EmoteWidgetQml()
+engine.rootContext().setContextProperty("EmoteBackend", backend)
 ```
 
 **QML 端 (`main.qml`):**
@@ -116,17 +123,15 @@ Window {
     width: 800; height: 600
 
     WebEngineView {
-        objectName: "emoteView" // Python 通过这个名字查找
         anchors.fill: parent
         backgroundColor: "transparent"
-        
-        // 必须使用 emote:// 协议加载主页
-        url: "emote://pyside_webview.html"
+
+        // 具体的 QML 封装、targetView 和 URL 以 qml_tester/qml 中的实现为准
     }
 }
 ```
 
-### 场景 3: 自定义适配器 (Custom Adapter)
+### 场景 3: 自定义适配器 (高级扩展)
 
 如果你想支持 Tkinter 或 CEF Python，只需编写一个 Adapter 插件。
 
@@ -142,7 +147,7 @@ class MyAdapter(IViewAdapter):
         pass
     # ... 实现其他接口
 ```
-调用：`create_emote_widget(adapter_name="my_driver")`
+`create_emote_widget()` 是底层 Adapter 工厂，不是 `EmoteWidget` Facade 的替代品。默认 Qt Adapter 需要调用者提供一个已创建的 WebView；如需普通 Qt 集成，优先使用 `EmoteWidget()`。
 
 ---
 
@@ -152,7 +157,6 @@ class MyAdapter(IViewAdapter):
 
 ```
 .
-├── run_tests.py              # [入口] 功能测试平台
 ├── requirements.txt          # 依赖列表
 ├── LICENSE                   # 许可协议
 │
@@ -172,7 +176,7 @@ class MyAdapter(IViewAdapter):
 │   │   └── common/           # 通用 UI 组件 (如调试监视器)
 │   │
 │   ├── utils/                # [工具集] (路径解析、日志、音频)
-│   ├── config/               # [配置] 默认配置文件
+│   ├── default_config/       # [配置] 默认配置文件
 │   │
 │   └── web_frontend/         # [前端资源] (打包在包内)
 │       ├── pyside_webview.html # 核心 HTML
@@ -185,9 +189,17 @@ class MyAdapter(IViewAdapter):
 
 ---
 
+## 🧪 其他测试入口
+
+```bash
+python testers/click_through_test.py
+```
+
+该脚本用于专项检查透明窗口和点击穿透。由于 Qt WebEngine 依赖图形环境，测试脚本应在本地桌面环境中运行。
+
 ## ⚠️ 关于开发的说明
 
-本项目由独立开发者维护。核心 Python SDK (`EmoteController`) 经过了深度重构，具备极高的稳定性和扩展性。
+核心 Python SDK (`EmoteController`) 已完成一轮 Controller-Adapter 重构，但项目仍处于持续整理阶段；请以当前源码、`docs/ARCHITECTURE.md` 和测试入口为准。
 
 前端部分 (`pyside_webview.html` & JS) 主要作为功能实现的载体，虽然功能完备，但仍有优化空间。项目大量使用了 AI 辅助编程来加速开发，特别是前端逻辑和部分样板代码。我们欢迎社区贡献代码，进一步完善前端交互或添加新的 Adapter。
 

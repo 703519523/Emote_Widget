@@ -2,9 +2,11 @@ import os
 import threading
 from functools import lru_cache
 import time
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from PySide6.QtCore import QUrl
 from .logger import file_logger as logger
+from .model_normalizer import normalize_model_path
 
 # 动态计算包内 web_frontend 的绝对路径
 # 结构: emote_widget/utils/paths.py -> (up) -> emote_widget/ -> (down) -> web_frontend
@@ -209,6 +211,18 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
                 final_path = found
     
     if final_path:
+        # FreeMote 的前端播放器只接受裸 PSB。先验证并解包 raw/LZ4/MDF，
+        # 对包装格式写入内容寻址缓存，原始资源保持不变。
+        if internal_subfolder == "models" and os.path.splitext(final_path)[1].lower() == ".psb":
+            try:
+                normalized_path = normalize_model_path(final_path)
+                if normalized_path != Path(final_path).resolve():
+                    register_allowed_path(os.path.dirname(str(normalized_path)))
+                    final_path = str(normalized_path)
+            except Exception as exc:
+                logger.error(f"PSB 模型规范化失败，拒绝加载 '{final_path}': {exc}")
+                return None
+
         # [Security] 二次校验：确保解析出的绝对路径在白名单内
         if not is_path_allowed(final_path):
             logger.warning(f"[Security] 拦截非法路径访问尝试: {final_path}")

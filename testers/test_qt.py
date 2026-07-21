@@ -1,6 +1,10 @@
 # type: ignore
 import sys
 import os
+
+# 将项目根目录添加到 Python 路径（适配 testers/ 子目录）
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import io
 import json
 import traceback
