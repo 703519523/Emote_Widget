@@ -151,7 +151,35 @@ _safe_query(expression, callback)
 
 模型资源通常由 `paths.py` 解析为允许访问的资源 URL。`EmoteSchemeHandler` 负责处理 `emote://` 请求，并配合资源白名单避免任意路径访问。
 
-在 URL 解析阶段，`models/*.psb` 会经过 `emote_widget.utils.model_normalizer`。已有 raw `PSB\0` 文件保持旧 loader 路径，以兼容当前可工作的 `spec=ems` 模型；LZ4 Frame 和 MDF 包装输入则调用控件包内的 `emote_widget.utils.psb_converter`，执行解包、PSB 结构解析和 header checksum 校验。由于网页内置的是 EMS 驱动，包装内的 `spec=win` 模型还必须执行平台适配：当前仅在所有纹理均为未压缩 `RGBA8`、资源长度严格等于 `width × height × 4` 时，交换纹理 R/B 通道并将对象树 spec 安全改为 `ems`。通过校验和适配的模型会写入 `.emote_cache/normalized_models/` 缓存，原始文件不会被改写。加密 header、checksum 错误、未知 shell、非 `win/ems` spec、DXT 等压缩纹理或不一致的资源尺寸都会显式拒绝，避免把结构有效但驱动无法加载的 PSB 交给前端。
+在 URL 解析阶段，`models/*.psb` 会经过 `emote_widget.utils.model_normalizer`。已有 raw `PSB\0` 文件保持旧 loader 路径，以兼容当前可工作的 `spec=ems` 模型；包装/加密输入则调用控件包内的 `emote_widget.utils.psb_converter`，执行以下流程：
+
+**1. Shell 脱壳** (`psb_shell.py`)
+- 支持 LZ4 Frame、MDF、PSZ (zlib) 压缩包装
+- 自动检测并解包，输出 raw PSB 字节流
+
+**2. XorShift128 解密** (`psb_crypto.py`)
+- 检测 PSB v2/v3/v4 header 的加密标志
+- **PSB v3/v4**: 支持自动密钥恢复（通过已知 header 长度反推 XorShift128 的 Key4）
+- **PSB v2**: 需要用户提供显式密钥
+- 解密后重新计算 Adler32 checksum 确保完整性
+
+**3. 平台适配** (`ems_adapter.py`)
+- 检查 PSB 的 `spec` 字段（`win`/`ems`/`krkr` 等）
+- 由于网页内置的是 EMS 驱动，`spec=win` 模型需执行平台适配：
+  - 仅支持所有纹理均为未压缩 `RGBA8`、资源长度严格等于 `width × height × 4`
+  - 交换纹理 R/B 通道（Win BGRA → EMS RGBA）
+  - 将对象树 spec 字段从 `"win"` 安全改为 `"ems"`
+  - 重新计算并验证 checksum
+
+**4. 缓存写入**
+- 通过校验和适配的模型会写入 `.emote_cache/normalized_models/` 缓存
+- 使用内容寻址（源文件 SHA256 的前 16 位）确保缓存一致性
+- 原始文件永不改写
+
+**安全边界**：
+- Checksum 错误、未知 shell、非 `win/ems` spec 会显式拒绝
+- DXT 等压缩纹理、不一致的资源尺寸会拒绝平台适配
+- 避免把"结构有效但驱动无法加载"的 PSB 交给前端
 
 播放器存在三个不同的就绪概念，阅读代码时不要混为一谈：
 
