@@ -14,6 +14,8 @@ import struct
 import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
+from .psb_types import PsbDouble
+
 
 class PsbBadFormatError(ValueError):
     """The input is not a structurally valid supported PSB."""
@@ -243,7 +245,7 @@ class PsbReader:
             return True, payload
         if PsbObjType.NUMBER_N0 <= type_byte <= PsbObjType.NUMBER_N8:
             width = type_byte - PsbObjType.NUMBER_N0
-            return self._uint(payload, width), payload + width
+            return self._int(payload, width), payload + width
         if PsbObjType.ARRAY_N1 <= type_byte <= PsbObjType.ARRAY_N8:
             return self._read_array(pos)
         if PsbObjType.STRING_N1 <= type_byte <= PsbObjType.STRING_N4:
@@ -257,7 +259,7 @@ class PsbReader:
         if type_byte == PsbObjType.FLOAT:
             return struct.unpack_from("<f", self.data, payload)[0], payload + 4
         if type_byte == PsbObjType.DOUBLE:
-            return struct.unpack_from("<d", self.data, payload)[0], payload + 8
+            return PsbDouble(struct.unpack_from("<d", self.data, payload)[0]), payload + 8
         if type_byte == PsbObjType.LIST:
             return self._read_list(payload)
         if type_byte == PsbObjType.OBJECTS:
@@ -353,3 +355,12 @@ class PsbReader:
         if pos < 0 or end > len(self.data):
             raise PsbBadFormatError("truncated compact integer")
         return int.from_bytes(self.data[pos:end], "little", signed=False)
+
+    def _int(self, pos: int, width: int) -> int:
+        """Read a signed PSB NumberN payload (arrays/indexes stay unsigned)."""
+        if width == 0:
+            return 0
+        end = pos + width
+        if pos < 0 or end > len(self.data):
+            raise PsbBadFormatError("truncated compact integer")
+        return int.from_bytes(self.data[pos:end], "little", signed=True)

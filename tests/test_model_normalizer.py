@@ -1,3 +1,4 @@
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -117,15 +118,15 @@ class ModelNormalizerTests(unittest.TestCase):
         self.assertEqual(before["spec"], "win")
         self.assertEqual(after["spec"], "ems")
         self.assertTrue(after["checksum_valid"])
-        self.assertEqual(len(converted), len(raw))
 
-        header = before["header"]
-        first_resource = before["resources"][0]
-        start = header["offset_chunk_data"] + first_resource["offset"]
-        self.assertEqual(converted[start], raw[start + 2])
-        self.assertEqual(converted[start + 1], raw[start + 1])
-        self.assertEqual(converted[start + 2], raw[start])
-        self.assertEqual(converted[start + 3], raw[start + 3])
+        before_resource = before["resources"][0]
+        before_start = before["header"]["offset_chunk_data"] + before_resource["offset"]
+        after_resource = after["resources"][0]
+        after_start = after["header"]["offset_chunk_data"] + after_resource["offset"]
+        self.assertEqual(converted[after_start], raw[before_start + 2])
+        self.assertEqual(converted[after_start + 1], raw[before_start + 1])
+        self.assertEqual(converted[after_start + 2], raw[before_start])
+        self.assertEqual(converted[after_start + 3], raw[before_start + 3])
 
     def test_psb_plugin_contains_freemote_rl_codec(self):
         from plugins.psb_decryption.rle_compress import compress, decompress
@@ -135,6 +136,39 @@ class ModelNormalizerTests(unittest.TestCase):
 
         self.assertNotEqual(encoded, pixels)
         self.assertEqual(decompress(encoded, align=4, actual_size=len(pixels)), pixels)
+
+    def test_psb_plugin_compiler_builds_parseable_v4_with_extra_resources(self):
+        from plugins.psb_decryption.psb_compiler import PsbCompiler
+        from plugins.psb_decryption.psb_reader import PsbReader
+
+        root = {
+            "spec": "ems",
+            "label": "compiler-roundtrip",
+            "regular": {
+                "_type": "resource", "index": 0,
+                "is_extra": False, "data": b"regular-resource",
+            },
+            "extra": {
+                "_type": "resource", "index": 0,
+                "is_extra": True, "data": b"extra-resource",
+            },
+        }
+
+        compiled = PsbCompiler(version=4).compile(root)
+        parsed = PsbReader(compiled, load_resource_data=True).parse()
+
+        self.assertEqual(parsed["spec"], "ems")
+        self.assertTrue(parsed["checksum_valid"])
+        self.assertEqual(parsed["resources"][0]["data"], b"regular-resource")
+        self.assertEqual(parsed["extra_resources"][0]["data"], b"extra-resource")
+
+    def test_psb_plugin_uses_full_krkr_atlas_conversion(self):
+        from plugins.psb_decryption import ems_adapter
+
+        source = inspect.getsource(ems_adapter)
+        self.assertIn("def _pack_atlases", source)
+        self.assertIn("def _convert_krkr_tree_to_ems", source)
+        self.assertIn("PsbCompiler", source)
 
 
 if __name__ == "__main__":
