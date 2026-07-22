@@ -213,3 +213,7 @@ __marimo__/
 
 # 我用来测试的模型
 modellist/
+test_models/
+
+# 插件运行时启用状态（每台设备独立）
+plugins/.plugin_state.json

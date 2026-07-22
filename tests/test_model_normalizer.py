@@ -10,14 +10,21 @@ from emote_widget.core.middleware import Middleware
 
 
 class ModelNormalizerTests(unittest.TestCase):
+    WRAPPED_WIN_FIXTURE = Path("test_models/dx_e-moteアズキ私服a.psb")
+
     def tearDown(self):
         MiddlewareManager.clear_all()
+
+    def _require_wrapped_win_fixture(self):
+        if not self.WRAPPED_WIN_FIXTURE.exists():
+            self.skipTest("local wrapped Win PSB fixture is not available")
+        return self.WRAPPED_WIN_FIXTURE
 
     def test_extension_normalizes_real_wrapped_model_to_ems(self):
         from emote_widget.utils.model_normalizer import normalize_model_path
         from plugins.psb_decryption.main import PsbDecryptionMiddleware
 
-        source = Path("models/dx_e-moteアズキ私服a.psb")
+        source = self._require_wrapped_win_fixture()
         MiddlewareManager.get_chain("psb.normalize").use(PsbDecryptionMiddleware())
 
         with tempfile.TemporaryDirectory() as directory:
@@ -27,8 +34,7 @@ class ModelNormalizerTests(unittest.TestCase):
     def test_core_loader_rejects_wrapped_input_without_extension(self):
         from emote_widget.utils.model_normalizer import normalize_model_path
 
-        source = Path("models/dx_e-moteアズキ私服a.psb")
-        self.assertTrue(source.exists())
+        source = self._require_wrapped_win_fixture()
         from emote_widget.core.middleware import MiddlewareManager
         MiddlewareManager.clear_all()
         with self.assertRaises(ValueError):
@@ -102,8 +108,7 @@ class ModelNormalizerTests(unittest.TestCase):
             self.assertIn("cannot adapt spec='krkr' to EMS", str(raised.exception))
 
     def test_real_lz4_win_rgba8_model_is_adapted_for_ems_driver(self):
-        source = Path("models/dx_e-moteアズキ私服a.psb")
-        self.assertTrue(source.exists(), "real wrapped regression fixture is missing")
+        source = self._require_wrapped_win_fixture()
 
         from emote_widget.utils.psb_converter import PsbReader
         from plugins.psb_decryption.psb_shell import unwrap_psb
