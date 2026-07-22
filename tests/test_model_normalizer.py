@@ -9,6 +9,20 @@ from emote_widget.core.middleware import Middleware
 
 
 class ModelNormalizerTests(unittest.TestCase):
+    def tearDown(self):
+        MiddlewareManager.clear_all()
+
+    def test_extension_normalizes_real_wrapped_model_to_ems(self):
+        from emote_widget.utils.model_normalizer import normalize_model_path
+        from plugins.psb_decryption.main import PsbDecryptionMiddleware
+
+        source = Path("models/dx_e-moteアズキ私服a.psb")
+        MiddlewareManager.get_chain("psb.normalize").use(PsbDecryptionMiddleware())
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = normalize_model_path(source, cache_root=directory)
+            self.assertEqual(PsbReader(target.read_bytes()).parse()["spec"], "ems")
+
     def test_core_loader_rejects_wrapped_input_without_extension(self):
         from emote_widget.utils.model_normalizer import normalize_model_path
 
@@ -43,7 +57,7 @@ class ModelNormalizerTests(unittest.TestCase):
 
             self.assertNotEqual(result, source)
             self.assertEqual(result.read_bytes(), normalized)
-            normalizer_cls.assert_called_once_with(source)
+            normalizer_cls.assert_called_once_with(source, require_win_spec=False)
 
     def test_pure_model_keeps_legacy_loader_compatibility(self):
         from emote_widget.utils.model_normalizer import normalize_model_path

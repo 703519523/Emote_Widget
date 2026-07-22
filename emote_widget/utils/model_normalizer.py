@@ -20,7 +20,7 @@ def _normalize_model_path_default(context: dict) -> dict:
     cache_root = context["cache_root"]
 
     if context.get("normalized_data") is not None:
-        result = PsbNormalizer(source).normalize_data(
+        result = PsbNormalizer(source, require_win_spec=False).normalize_data(
             context["normalized_data"],
             shell=context.get("shell", "raw"),
             source_size=source.stat().st_size,
