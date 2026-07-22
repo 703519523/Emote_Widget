@@ -114,6 +114,24 @@ class ModelNormalizerTests(unittest.TestCase):
         self.assertEqual(unwrapped.shell, "psp")
         self.assertEqual(unwrapped.data, payload)
 
+    def test_psb_plugin_native_facade_is_optional_and_exposes_psp_capability(self):
+        from plugins.psb_decryption import _native
+
+        self.assertIsInstance(_native.capabilities(), frozenset)
+        if _native.available("psp_lzss_unpack"):
+            self.assertIsNone(_native.load_error())
+
+    def test_psb_plugin_native_psp_unpack_matches_python_fallback(self):
+        from plugins.psb_decryption import _native
+        from plugins.psb_decryption.psb_shell import _unpack_psp_python
+
+        payload = b"PSB\0test"
+        shell = struct.pack("<I", len(payload)) + b"\xff" + payload
+        native = _native.unpack_psp(shell)
+        if native is None:
+            self.skipTest("native extension unavailable")
+        self.assertEqual(native, _unpack_psp_python(shell, len(payload)))
+
     def test_psb_plugin_psp_lzss_rejects_truncated_stream(self):
         from plugins.psb_decryption.psb_shell import PsbShellError, unwrap_psb
 

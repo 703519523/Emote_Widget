@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import struct
 import zlib
 
+from ._native import unpack_psp as _native_unpack_psp
+
 
 class PsbShellError(ValueError):
     pass
@@ -20,6 +22,65 @@ class UnwrappedPsb:
 LZ4_FRAME_MAGIC = b"\x04\x22\x4D\x18"
 PSZ_MAGIC = b"PSZ\0"
 PSP_EMBEDDED_MAGIC_OFFSET = 5
+
+
+def _unpack_psp_python(data: bytes, unpacked_size: int) -> bytes:
+    frame = bytearray(0x1000)
+    frame_position = 1
+    source_position = 4
+    output = bytearray()
+    try:
+        while len(output) < unpacked_size:
+            control = data[source_position]
+            source_position += 1
+            bit = 1
+            while len(output) < unpacked_size and bit != 0x100:
+                if control & bit:
+                    value = data[source_position]
+                    source_position += 1
+                    frame[frame_position & 0xFFF] = value
+                    frame_position += 1
+                    output.append(value)
+                else:
+                    high = data[source_position]
+                    low = data[source_position + 1]
+                    source_position += 2
+                    offset = (high << 4) | (low >> 4)
+                    for _ in range(2 + (low & 0xF)):
+                        if len(output) == unpacked_size:
+                            break
+                        value = frame[offset & 0xFFF]
+                        offset += 1
+                        frame[frame_position & 0xFFF] = value
+                        frame_position += 1
+                        output.append(value)
+                bit <<= 1
+    except IndexError as exc:
+        raise PsbShellError(
+            f"truncated PSP LZSS stream at input offset {source_position}"
+        ) from exc
+    return bytes(output)
+
+
+def _unpack_psp(data: bytes) -> bytes:
+    if len(data) < 5:
+        raise PsbShellError("truncated PSP shell")
+    unpacked_size = struct.unpack_from("<I", data)[0]
+    if unpacked_size < 4:
+        raise PsbShellError(f"invalid PSP decompressed size: {unpacked_size}")
+    try:
+        pure = _native_unpack_psp(data)
+    except ValueError as exc:
+        raise PsbShellError(str(exc)) from exc
+    if pure is None:
+        pure = _unpack_psp_python(data, unpacked_size)
+    if len(pure) != unpacked_size:
+        raise PsbShellError(
+            f"PSP decompressed size mismatch: expected {unpacked_size}, got {len(pure)}"
+        )
+    if not pure.startswith(b"PSB\0"):
+        raise PsbShellError("psp payload is not PSB\\0")
+    return pure
 
 
 def detect_shell(data: bytes) -> str:
@@ -74,44 +135,7 @@ def unwrap_psb(data: bytes) -> UnwrappedPsb:
         except RuntimeError as exc:
             raise PsbShellError(f"invalid LZ4 frame: {exc}") from exc
     elif shell == "psp":
-        if len(data) < 5:
-            raise PsbShellError("truncated PSP shell")
-        unpacked_size = struct.unpack_from("<I", data)[0]
-        if unpacked_size < 4:
-            raise PsbShellError(f"invalid PSP decompressed size: {unpacked_size}")
-        frame = bytearray(0x1000)
-        frame_position = 1
-        source_position = 4
-        output = bytearray()
-        try:
-            while len(output) < unpacked_size:
-                control = data[source_position]
-                source_position += 1
-                bit = 1
-                while len(output) < unpacked_size and bit != 0x100:
-                    if control & bit:
-                        value = data[source_position]
-                        source_position += 1
-                        frame[frame_position & 0xFFF] = value
-                        frame_position += 1
-                        output.append(value)
-                    else:
-                        high = data[source_position]
-                        low = data[source_position + 1]
-                        source_position += 2
-                        offset = (high << 4) | (low >> 4)
-                        for _ in range(2 + (low & 0xF)):
-                            value = frame[offset & 0xFFF]
-                            offset += 1
-                            frame[frame_position & 0xFFF] = value
-                            frame_position += 1
-                            output.append(value)
-                    bit <<= 1
-        except IndexError as exc:
-            raise PsbShellError(
-                f"truncated PSP LZSS stream at input offset {source_position}"
-            ) from exc
-        pure = bytes(output[:unpacked_size])
+        pure = _unpack_psp(data)
     elif shell == "mdf":
         if len(data) < 10:
             raise PsbShellError("truncated MDF shell")

@@ -462,11 +462,10 @@ def _fix_timeline_content_values(value: Any) -> None:
 
 def _bgr_to_rgb(data: bytearray | bytes) -> bytes:
     """Convert BGRA memory bytes to RGBA and return immutable bytes."""
-    converted = bytearray(data)
-
-    for i in range(0, len(converted), 4):
-        converted[i], converted[i + 2] = converted[i + 2], converted[i]
-    return bytes(converted)
+    data = bytearray(data)
+    for i in range(0, len(data), 4):
+        data[i], data[i + 2] = data[i + 2], data[i]
+    return bytes(data)
 
 
 def _update_texture_metadata_for_ems(obj: Any) -> None:

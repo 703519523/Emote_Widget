@@ -57,6 +57,8 @@ class PsbCompiler:
         self.extra_resources.clear()
 
         name_set: Set[str] = set()
+        name_usages: Dict[str, int] = {}
+        string_usages: Dict[str, int] = {}
         string_list: List[Tuple[str, int]] = []  # (value, original_index)
         resource_map: Dict[bytes, int] = {} if merge_resources else None
 
@@ -75,6 +77,9 @@ class PsbCompiler:
                         idx = len(self.strings)
                         self.strings.append(o)
                         self.string_to_index[o] = idx
+                        string_usages[o] = 0
+                    else:
+                        string_usages[o] += 1
                 else:
                     if o not in self.string_to_index:
                         idx = len(string_list)
@@ -130,6 +135,10 @@ class PsbCompiler:
                     # 收集键名
                     if not key.startswith('_'):  # 跳过内部标记
                         name_set.add(key)
+                        if key in name_usages:
+                            name_usages[key] += 1
+                        else:
+                            name_usages[key] = 0
                     # 遍历值
                     travel_collect(value, depth + 1)
                 return o
@@ -141,11 +150,25 @@ class PsbCompiler:
         travel_collect(obj)
 
         # 构建 Names 列表（排序以匹配 C# 行为）
-        # C# uses StringComparer.Ordinal, i.e. UTF-16 code-unit order rather
-        # than the process locale.  UTF-8 byte order is equivalent for valid
-        # UTF-8 sequences and is also what the PSB trie stores.
-        self.names = sorted(list(name_set), key=lambda s: s.encode('utf-8'))
+        # String.CompareOrdinal compares UTF-16 code units, not Unicode code
+        # points or UTF-8 bytes. Big-endian UTF-16 bytes preserve that order.
+        if merge_strings and merge_resources:
+            # PsbCompiler.Compile calls Merge(true), whose Collect(...,
+            # sortString:false) orders names by descending occurrence count.
+            # LINQ OrderByDescending is stable, preserving first traversal
+            # order for equal counts.
+            self.names = sorted(name_usages, key=lambda s: -name_usages[s])
+        else:
+            self.names = sorted(
+                name_set, key=lambda s: s.encode('utf-16-be', errors='surrogatepass')
+            )
         self.name_to_index = {name: idx for idx, name in enumerate(self.names)}
+
+        if merge_strings and merge_resources:
+            self.strings.sort(key=lambda s: -string_usages[s])
+            self.string_to_index = {
+                value: index for index, value in enumerate(self.strings)
+            }
 
         # Debug: 打印收集统计
         print(f"[Compiler] Collected: {len(self.names)} names, {len(self.strings)} strings, {len(self.resources)} resources")
@@ -221,6 +244,9 @@ class PsbCompiler:
 
             # 写入 offsets array
             output.write(write_psb_array(offsets))
+            # In v1 HeaderLength points to the offsets array while
+            # OffsetNames points to the following zero-terminated key data.
+            self._v1_offset_names = output.tell()
             # 写入 names data
             output.write(names_data.getvalue())
         else:
@@ -230,13 +256,29 @@ class PsbCompiler:
             output.write(write_psb_array(names_data))
 
     @staticmethod
-    def _build_name_trie(names: List[str], optimize: bool = False) -> Tuple[List[int], List[int], List[int]]:
+    def _build_name_trie(
+        names: List[str], optimize: bool = False, _select_layout: bool = True
+    ) -> Tuple[List[int], List[int], List[int]]:
         """Port PrefixTree.Build(..., optimize:false) from the C# library.
 
         The PSB trie stores UTF-8 bytes (not Unicode code points).  Index 0 is
         the root.  ``tree[id]`` stores the parent id and ``offsets[id]`` is
         the base used to recover a byte as ``id - offsets[parent]``.
         """
+        # PrefixTree.Build in C# builds both allocators in OptimizeMode and
+        # selects whichever has the smaller serialized representation.
+        if optimize and _select_layout:
+            optimized = PsbCompiler._build_name_trie(names, True, False)
+            legacy = PsbCompiler._build_name_trie(names, False, False)
+
+            def serialized_size(layout: Tuple[List[int], List[int], List[int]]) -> int:
+                name_ids, tree_values, offset_values = layout
+                return sum(len(write_psb_array(values)) for values in (
+                    offset_values, tree_values, name_ids
+                ))
+
+            return optimized if serialized_size(optimized) <= serialized_size(legacy) else legacy
+
         class Node:
             __slots__ = ("char", "parent", "children", "begin", "id")
 
@@ -621,6 +663,10 @@ class PsbCompiler:
 
     def _write_dict(self, output: io.BytesIO, obj: Dict[str, Any]):
         """写入字典（Objects/Dictionary）"""
+        if self.version == 1:
+            self._write_dict_v1(output, obj)
+            return
+
         output.write(bytes([PsbType.OBJECTS]))
 
         sorted_keys = [k for k in obj.keys() if not k.startswith('_')]
@@ -675,6 +721,27 @@ class PsbCompiler:
 
         # 写入 values data
         output.write(values_data.getvalue())
+
+    def _write_dict_v1(self, output: io.BytesIO, obj: Dict[str, Any]) -> None:
+        """Match PSB v1 SaveObjectsV1: offset array + key/value records."""
+        output.write(bytes([PsbType.OBJECTS]))
+        keys = [key for key in obj if not key.startswith('_')]
+        # OptimizeMode makes PsbObjectOrderByKey irrelevant in modern
+        # SaveObjects, but SaveObjectsV1 only observes PsbObjectOrderByKey,
+        # whose default is true.
+        keys.sort(key=lambda s: s.encode('utf-16-be', errors='surrogatepass'))
+
+        offsets: List[int] = []
+        records = io.BytesIO()
+        for key in keys:
+            offsets.append(records.tell())
+            index = self.name_to_index[key]
+            size = get_size(index)
+            records.write(bytes([0x11 + size - 1]))  # KeyNameN1..N4
+            records.write(zip_number_bytes(index, size))
+            self._pack(records, obj[key])
+        output.write(write_psb_array(offsets))
+        output.write(records.getvalue())
 
     def _write_priority(self, value: Any) -> int:
         if value is None:
@@ -819,7 +886,10 @@ class PsbCompiler:
 
         # HeaderLength (+8), then offsets (+12 ... +36).
         output.write(struct.pack('<I', header_len))
-        output.write(struct.pack('<I', offset_names))
+        output.write(struct.pack(
+            '<I', getattr(self, '_v1_offset_names', offset_names)
+            if self.version == 1 else offset_names
+        ))
         output.write(struct.pack('<I', offset_strings))
         output.write(struct.pack('<I', offset_strings_data))
         output.write(struct.pack('<I', offset_chunk_offsets))

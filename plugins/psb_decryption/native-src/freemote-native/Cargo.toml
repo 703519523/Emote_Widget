@@ -1,0 +1,12 @@
+[package]
+name = "freemote-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "_freemote_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }

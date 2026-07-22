@@ -576,3 +576,5 @@ def set_parameter(self, name: str, value: float):
 核心规范化器只解析 `PSB\0` 开头的 pure/raw PSB，并负责结构校验、checksum 校验和 spec 验证。LZ4、PSZ、MDF、PSP LZSS 等包装格式的检测与脱壳，以及解密和平台适配，均由 `plugins/psb_decryption/` 提供；未启用该插件时，包装输入会被拒绝。PSP shell 按 FreeMote 规则检查 offset 5 的 `PSB` 特征，并使用 4096-byte 滑动窗口解包。插件初始化时保存自己的 middleware 实例，清理时只移除自身注册，不会清空其他插件的 `psb.normalize` 中间件。
 
 当前插件内的 EMS 适配器同时支持 Win 的 RGBA8 纹理和 KrKr 的 RL 压缩纹理。新版实现同步了完整 `PsbCompiler`：Win 路径会保留普通/额外资源索引空间，仅对纹理描述符引用的 regular RGBA8/RL resource 执行 BGRA→RGBA 通道转换后完整重编译，FlattenArray 等 extra resources 原样保留；KrKr 路径会解压 RL、交换 BGRA 通道、按 C# FreeMote 的 FIFO/MaxOneAxis 规则重新打包图集、展开时间轴并重写 motion 纹理引用，最后重建 v2/v3/v4 PSB header、offset 与 checksum 后输出 `spec=ems`。编译器当前为纯 Python 实现，行为兼容优先，性能敏感部分后续可由 Rust 后端替换。解密算法仍由插件中的独立 crypto 模块负责，适配失败不会被伪装成路径错误。
+
+插件包含可选的 PyO3 原生后端及其 `native-src/` Cargo workspace。当前 native capability 仅为 `psp_lzss_unpack`：Windows x64 随附 `abi3-py310` 扩展，PSP LZSS 会优先直接写入 CPython 最终 `bytes`；扩展缺失、ABI 不兼容或加载失败时自动回退纯 Python，且可通过 `_native.load_error()` 诊断。`PsbCompiler` 仍为纯 Python实现，不能把 PSP 解包加速描述为 Rust PSB 编译器。

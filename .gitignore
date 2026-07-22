@@ -217,3 +217,9 @@ test_models/
 
 # 插件运行时启用状态（每台设备独立）
 plugins/.plugin_state.json
+
+# Plugin-local Rust build artifacts
+plugins/psb_decryption/native-src/target/
+
+# Audited Windows x64 CPython abi3 native plugin backend
+!plugins/psb_decryption/_freemote_native.pyd
