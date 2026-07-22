@@ -209,6 +209,40 @@ class PluginSystemV2Tests(unittest.TestCase):
         self.assertFalse(controller.reload_plugins())
         self.assertFalse(controller.plugins.cleanup_called)
 
+    def test_plugin_loader_lists_all_modules_with_enabled_state(self):
+        from emote_widget.core.plugin_system import PluginLoaderWorker, PluginStateStore
+
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            open(os.path.join(plugin_dir, "enabled.py"), "w", encoding="utf-8").close()
+            disabled_dir = os.path.join(plugin_dir, "disabled")
+            os.makedirs(disabled_dir)
+            open(os.path.join(disabled_dir, "__init__.py"), "w", encoding="utf-8").close()
+            state = PluginStateStore(plugin_dir)
+            state.set_enabled("disabled", False)
+            worker = PluginLoaderWorker(plugin_dir, state_store=state)
+
+            self.assertEqual(
+                worker.list_plugin_modules(),
+                [
+                    {"module": "disabled", "enabled": False},
+                    {"module": "enabled", "enabled": True},
+                ],
+            )
+
+    def test_qt_tester_plugin_tab_exposes_enable_and_reload_controls(self):
+        tester_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "testers",
+            "test_qt.py",
+        )
+        with open(tester_path, encoding="utf-8") as file:
+            source = file.read()
+
+        self.assertIn("self.plugin_state_list = QListWidget()", source)
+        self.assertIn("self.reload_plugins_btn = QPushButton", source)
+        self.assertIn("set_plugin_enabled", source)
+        self.assertIn("reload_plugins()", source)
+
 
 if __name__ == "__main__":
     unittest.main()

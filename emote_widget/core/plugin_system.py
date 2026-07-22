@@ -173,6 +173,31 @@ class PluginLoaderWorker(QObject):
         """返回本轮扫描所得模块快照。"""
         return tuple(self._modules_to_load)
 
+    def list_plugin_modules(self) -> List[Dict[str, object]]:
+        """列出可发现的全部插件模块及其持久化启用状态。"""
+        modules: List[str] = []
+        if not os.path.isdir(self._plugin_dir):
+            return []
+
+        for filename in os.listdir(self._plugin_dir):
+            filepath = os.path.join(self._plugin_dir, filename)
+            module_name: Optional[str] = None
+            if os.path.isfile(filepath) and filename.endswith(".py"):
+                if not filename.startswith("__"):
+                    module_name = filename[:-3]
+            elif os.path.isdir(filepath):
+                if not filename.startswith(("__", ".")) and os.path.exists(
+                    os.path.join(filepath, "__init__.py")
+                ):
+                    module_name = filename
+            if module_name and module_name not in modules:
+                modules.append(module_name)
+
+        return [
+            {"module": name, "enabled": self._state_store.is_enabled(name)}
+            for name in sorted(modules)
+        ]
+
     def scan_for_plugin_modules(self) -> None:
         """
         [预处理] 扫描插件目录，生成待加载模块列表。

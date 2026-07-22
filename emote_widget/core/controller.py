@@ -755,6 +755,11 @@ class EmoteController(QObject):
         """查询插件模块的持久化启用状态。"""
         return self._plugin_state_store.is_enabled(module_name)
 
+    @Slot(result=list)
+    def list_plugin_modules(self) -> List[Dict[str, object]]:
+        """列出插件目录中的全部模块及启用状态，包括当前禁用的模块。"""
+        return self._plugin_loader_worker.list_plugin_modules()
+
     @Slot(result=bool)
     def reload_plugins(self) -> bool:
         """清理当前插件并按最新启用状态异步重新扫描、加载。"""
