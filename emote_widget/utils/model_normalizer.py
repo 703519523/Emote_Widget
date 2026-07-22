@@ -19,12 +19,22 @@ def _normalize_model_path_default(context: dict) -> dict:
     source = Path(context["source_path"]).resolve()
     cache_root = context["cache_root"]
 
-    if detect_shell(source.read_bytes()) == "raw":
+    if context.get("normalized_data") is not None:
+        result = PsbNormalizer(source).normalize_data(
+            context["normalized_data"],
+            shell=context.get("shell", "raw"),
+            source_size=source.stat().st_size,
+            crypto_summary=context.get("crypto_summary"),
+        )
+        normalized_data = result.data
+        context["summary"] = result.summary
+    elif detect_shell(source.read_bytes()) == "raw":
         context["normalized_path"] = source
         return context
-
-    result = PsbNormalizer(source).normalize_with_summary()
-    normalized_data = result.data
+    else:
+        result = PsbNormalizer(source).normalize_with_summary()
+        normalized_data = result.data
+        context["summary"] = result.summary
     if result.summary.get("spec") == "win":
         normalized_data = adapt_win_psb_to_ems(normalized_data)
 
@@ -39,7 +49,6 @@ def _normalize_model_path_default(context: dict) -> dict:
         os.replace(temporary, target)
 
     context["normalized_path"] = target
-    context["summary"] = result.summary
     return context
 
 
@@ -56,6 +65,9 @@ def normalize_model_path(path: StrPath, *, cache_root: StrPath = ".emote_cache/n
         "cache_root": Path(cache_root),
         "normalized_path": None,
         "summary": None,
+        "normalized_data": None,
+        "shell": None,
+        "crypto_summary": None,
     }
     chain = MiddlewareManager.get_chain("psb.normalize")
     result = chain.execute(context, terminal=_normalize_model_path_default)

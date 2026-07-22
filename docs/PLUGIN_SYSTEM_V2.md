@@ -273,6 +273,14 @@ class IEmotePlugin(ABC):
 - [ ] 集成测试：实际插件场景
 - [ ] 回归测试：现有插件兼容性
 
+### PSB 解密插件迁移状态
+
+- ✅ 解密实现位于 `plugins/psb_decryption/psb_crypto.py`
+- ✅ `PsbDecryptionPlugin` 在初始化时注册 `psb.normalize` 中间件
+- ✅ 核心 `psb_converter` 不再直接导入解密模块
+- ✅ 普通模型不依赖解密插件；加密模型按需启用插件
+- ✅ 已用 PSZ v4 样本验证插件链路可生成规范化缓存
+
 ---
 
 ## API 参考

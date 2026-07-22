@@ -161,11 +161,11 @@ _safe_query(expression, callback)
 - 支持 LZ4 Frame、MDF、PSZ (zlib) 压缩包装
 - 自动检测并解包，输出 raw PSB 字节流
 
-**2. XorShift128 解密** (`psb_crypto.py`)
-- 检测 PSB v2/v3/v4 header 的加密标志
-- **PSB v3/v4**: 支持自动密钥恢复（通过已知 header 长度反推 XorShift128 的 Key4）
-- **PSB v2**: 需要用户提供显式密钥
-- 解密后重新计算 Adler32 checksum 确保完整性
+**2. 可选解密插件** (`plugins/psb_decryption/`)
+- 核心 SDK 不直接实现加密解密
+- `psb_decryption` 插件通过 `psb.normalize` Middleware 接入
+- 插件负责 PSB v2/v3/v4 的 XorShift128 解密、密钥处理和 Adler32 校验
+- 未启用插件时，核心仍可处理 raw/未加密模型；加密模型由扩展层按需处理
 
 **3. 平台适配** (`ems_adapter.py`)
 - 检查 PSB 的 `spec` 字段（`win`/`ems`/`krkr` 等）
