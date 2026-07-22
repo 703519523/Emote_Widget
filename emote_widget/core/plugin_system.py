@@ -11,12 +11,61 @@ EmoteWidget 插件系统模块。
 
 import sys
 import os
+import json
 import importlib
 import logging
 from PySide6.QtCore import QObject, Signal, Slot
 from typing import Dict, List, ValuesView, Optional
 from emote_widget.utils.logger import plugin_logger as logger
 from .plugin_interface import IEmotePlugin
+
+
+class PluginStateStore:
+    """持久化插件模块的启用状态；未记录的插件默认启用。"""
+
+    FILENAME = ".plugin_state.json"
+
+    def __init__(self, plugin_dir: str) -> None:
+        self._path = os.path.join(plugin_dir, self.FILENAME)
+
+    def _read_disabled(self) -> set[str]:
+        if not os.path.exists(self._path):
+            return set()
+        try:
+            with open(self._path, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+            disabled = payload.get("disabled_plugins", [])
+            if not isinstance(disabled, list):
+                raise ValueError("disabled_plugins 必须是列表")
+            return {name for name in disabled if isinstance(name, str)}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.error(f"读取插件状态失败，将按全部启用处理: {exc}")
+            return set()
+
+    def is_enabled(self, module_name: str) -> bool:
+        return module_name not in self._read_disabled()
+
+    def set_enabled(self, module_name: str, enabled: bool) -> None:
+        if not module_name or not module_name.isidentifier():
+            raise ValueError(f"无效的插件模块名: {module_name!r}")
+
+        os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        disabled = self._read_disabled()
+        if enabled:
+            disabled.discard(module_name)
+        else:
+            disabled.add(module_name)
+
+        temp_path = f"{self._path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(
+                {"disabled_plugins": sorted(disabled)},
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+            file.write("\n")
+        os.replace(temp_path, self._path)
 
 class PluginAccessor:
     """
@@ -60,13 +109,15 @@ class PluginAccessor:
         """获取所有已加载的插件。"""
         return self._plugins.values()
     
-    def cleanup_all(self) -> None:
+    def cleanup_all(self, clear: bool = False) -> None:
         """调用所有插件的 cleanup 方法。"""
-        for p in self._plugins.values():
+        for p in list(self._plugins.values()):
             try: 
                 p.cleanup()
             except Exception as e:
                 logger.error(f"插件 {p.get_name()} 清理失败: {e}")
+        if clear:
+            self._plugins.clear()
     
     def __getattr__(self, name: str) -> IEmotePlugin:
         """
@@ -107,7 +158,7 @@ class PluginLoaderWorker(QObject):
     finished = Signal(list)
     """完成信号: (loaded_instances: List[IEmotePlugin])"""
 
-    def __init__(self, plugin_dir: str) -> None:
+    def __init__(self, plugin_dir: str, state_store: Optional[PluginStateStore] = None) -> None:
         """
         Args:
             plugin_dir (str): 插件根目录的绝对路径。
@@ -115,12 +166,20 @@ class PluginLoaderWorker(QObject):
         super().__init__()
         self._modules_to_load: List[str] = []
         self._plugin_dir: str = plugin_dir
+        self._state_store = state_store or PluginStateStore(plugin_dir)
+
+    @property
+    def modules_to_load(self) -> tuple[str, ...]:
+        """返回本轮扫描所得模块快照。"""
+        return tuple(self._modules_to_load)
 
     def scan_for_plugin_modules(self) -> None:
         """
         [预处理] 扫描插件目录，生成待加载模块列表。
         此步骤通常在主线程执行，因为它很快且只涉及文件系统枚举。
         """
+        self._modules_to_load.clear()
+
         # 将插件目录加入 sys.path，以便可以直接 import 其中的模块
         if self._plugin_dir not in sys.path:
             sys.path.insert(0, self._plugin_dir)
@@ -160,7 +219,10 @@ class PluginLoaderWorker(QObject):
                 
                 # 加入待加载列表 (去重)
                 if module_name and module_name not in self._modules_to_load:
-                    self._modules_to_load.append(module_name)
+                    if self._state_store.is_enabled(module_name):
+                        self._modules_to_load.append(module_name)
+                    else:
+                        logger.info(f"  [禁用] 跳过插件模块: {module_name}")
 
             logger.info(f"扫描结束，待加载模块列表: {self._modules_to_load}")
         except Exception as e:

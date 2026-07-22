@@ -363,6 +363,30 @@ class IEmotePlugin(ABC):
         pass
 ```
 
+### 插件启用状态与热重载 API
+
+插件 ID 使用扫描阶段的**模块名**：单文件插件 `plugins/foo.py` 对应 `foo`，包插件
+`plugins/foo/__init__.py` 也对应 `foo`。未记录状态的插件默认启用；禁用列表持久化到
+插件目录的 `.plugin_state.json`，扫描阶段会在导入和实例化之前跳过禁用模块。
+
+```python
+# 仅持久化状态，默认在下次启动时生效
+controller.set_plugin_enabled("psb_decryption", False)
+controller.is_plugin_enabled("psb_decryption")  # False
+
+# 显式热重载，使最新状态立即生效
+accepted = controller.reload_plugins()
+```
+
+`reload_plugins()` 是异步操作：它会调用所有当前插件的 `cleanup()`，清空运行时插件
+访问器，重新扫描并启动后台加载线程。若插件加载线程仍在运行，该调用返回 `False`，
+不会清理当前插件；成功接受请求时返回 `True`。调用方可继续监听
+`plugins_load_finished` 获知新一轮初始化完成。
+
+状态变更会广播 `plugin.state_changed`，重载开始会广播 `plugins.reload_started`。
+插件若要安全支持热重载，必须在 `cleanup()` 中精确撤销自身的事件订阅、中间件、
+线程、定时器和 Monkey patch。
+
 ---
 
 ## 插件开发指南

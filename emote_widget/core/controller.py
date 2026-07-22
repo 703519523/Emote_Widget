@@ -29,7 +29,11 @@ from emote_widget.default_config.default_constants import DEFAULT_CONFIG, __vers
 
 from emote_widget.core.adapter_interface import IViewAdapter
 from emote_widget.core.lipsync_thread import StreamLipSyncThread
-from emote_widget.core.plugin_system import PluginAccessor, PluginLoaderWorker
+from emote_widget.core.plugin_system import (
+    PluginAccessor,
+    PluginLoaderWorker,
+    PluginStateStore,
+)
 from emote_widget.core.plugin_interface import IEmotePlugin
 from emote_widget.core.event_bus import event_bus
 from emote_widget.core.python_api_bridge import PythonApiBridge
@@ -160,6 +164,7 @@ class EmoteController(QObject):
              self.plugin_dir = os.path.join(os.getcwd(), 'plugins')
 
         self.plugins: PluginAccessor = PluginAccessor()
+        self._plugin_state_store = PluginStateStore(self.plugin_dir)
 
         # 检测 QML 模式
         if type(self.view_adapter).__name__ == "QmlAdapter":
@@ -167,7 +172,10 @@ class EmoteController(QObject):
             self.plugins.set_qml_mode(True)
 
         self._plugin_loader_thread: QThread = QThread(self)
-        self._plugin_loader_worker: PluginLoaderWorker = PluginLoaderWorker(self.plugin_dir)
+        self._plugin_loader_worker: PluginLoaderWorker = PluginLoaderWorker(
+            self.plugin_dir,
+            state_store=self._plugin_state_store,
+        )
         self._plugin_loader_worker.moveToThread(self._plugin_loader_thread)
         self._plugin_loader_worker.progress_updated.connect(self._update_splash_plugin_progress)
         self._plugin_loader_worker.log_message.connect(self._add_splash_log)
@@ -728,6 +736,39 @@ class EmoteController(QObject):
         logger.info(f"插件加载和初始化耗时 {elapsed_s:.2f} 秒。将延迟 {delay_ms:.0f}ms 以满足最小显示时长。")
 
         QTimer.singleShot(int(delay_ms), self._proceed_to_model_loading_step)
+
+    @Slot(str, bool)
+    def set_plugin_enabled(self, module_name: str, enabled: bool) -> None:
+        """持久化插件模块状态；调用 :meth:`reload_plugins` 后立即生效。"""
+        self._plugin_state_store.set_enabled(module_name, enabled)
+        logger.info(
+            f"插件模块 '{module_name}' 已设为{'启用' if enabled else '禁用'}；"
+            "将在下次启动或显式重载插件时生效。"
+        )
+        event_bus.emit(
+            "plugin.state_changed",
+            {"module": module_name, "enabled": enabled},
+        )
+
+    @Slot(str, result=bool)
+    def is_plugin_enabled(self, module_name: str) -> bool:
+        """查询插件模块的持久化启用状态。"""
+        return self._plugin_state_store.is_enabled(module_name)
+
+    @Slot(result=bool)
+    def reload_plugins(self) -> bool:
+        """清理当前插件并按最新启用状态异步重新扫描、加载。"""
+        if self._plugin_loader_thread.isRunning():
+            logger.warning("插件加载线程仍在运行，本次重载请求已拒绝。")
+            return False
+
+        logger.info("开始重载插件...")
+        event_bus.emit("plugins.reload_started", {})
+        self.plugins.cleanup_all(clear=True)
+        self._plugins_are_ready = False
+        self._plugin_loader_worker.scan_for_plugin_modules()
+        self._plugin_loader_thread.start()
+        return True
 
     @Slot(str)
     def load_model(self, path_or_name: str) -> None:
