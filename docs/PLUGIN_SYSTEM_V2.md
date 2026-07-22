@@ -545,3 +545,8 @@ def set_parameter(self, name: str, value: float):
 **文档版本**: 1.0  
 **更新时间**: 2026-07-22  
 **维护者**: EmoteWidget Team
+
+
+## 当前 PSB 能力边界
+
+核心规范化器只解析 `PSB\0` 开头的 pure/raw PSB，并负责结构校验、checksum 校验和 spec 验证。LZ4、PSZ、MDF 等包装格式的检测与脱壳，以及解密和平台适配，均由 `plugins/psb_decryption/` 提供；未启用该插件时，包装输入会被拒绝。插件初始化时保存自己的 middleware 实例，清理时只移除自身注册，不会清空其他插件的 `psb.normalize` 中间件。

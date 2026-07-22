@@ -240,3 +240,8 @@ QML 模式下，访问器会返回安全代理；插件公共方法还会被包�
 2. Qt 主 HTML 当前通过 `file://` 加载，内部资源使用 `emote://`；QML 路径的 URL 组装不同，文档和代码后续应考虑统一。
 3. `docs/系统架构.mmd` 主要描述 Qt 初始化流程，不能单独代表完整 QML 架构。
 4. `walkthrough.md` 是审查记录；本文是稳定的架构基线。代码变动后应优先更新本文，再同步 README。
+
+
+### PSB 核心/插件边界
+
+核心仅接受并验证 pure/raw PSB（`PSB\0`）。包装格式脱壳、PSB 解密及 Win→EMS 适配属于可选插件能力，由 `plugins/psb_decryption/` 注册 middleware 提供。

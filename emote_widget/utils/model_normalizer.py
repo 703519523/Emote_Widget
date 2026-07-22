@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Union
 
 from emote_widget.core.middleware import MiddlewareManager
-from .psb_converter import PsbNormalizer, detect_shell
+from .psb_converter import PsbNormalizer
 
 
 StrPath = Union[str, os.PathLike[str]]
@@ -28,7 +28,7 @@ def _normalize_model_path_default(context: dict) -> dict:
         )
         normalized_data = result.data
         context["summary"] = result.summary
-    elif detect_shell(source.read_bytes()) == "raw":
+    elif source.read_bytes().startswith(b"PSB\0"):
         context["normalized_path"] = source
         return context
     else:

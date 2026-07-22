@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 import os
 from .psb_reader import PsbBadFormatError, PsbReader
-from .psb_shell import PsbShellError, unwrap_psb
 StrPath = Union[str, os.PathLike[str]]
 class PsbNormalizerError(ValueError):
     pass
@@ -35,9 +34,11 @@ class PsbNormalizer:
         return NormalizeResult(data, shell, summary)
     def normalize_with_summary(self) -> NormalizeResult:
         try:
-            unwrapped = unwrap_psb(self.path.read_bytes())
-            return self.normalize_data(unwrapped.data, shell=unwrapped.shell, source_size=self.path.stat().st_size)
-        except (OSError, PsbShellError, PsbNormalizerError) as exc:
+            data = self.path.read_bytes()
+            if not data.startswith(b"PSB\0"):
+                raise PsbNormalizerError("core normalizer accepts only raw/pure PSB input")
+            return self.normalize_data(data, shell="raw", source_size=self.path.stat().st_size)
+        except (OSError, PsbNormalizerError) as exc:
             raise PsbNormalizerError(f"cannot normalize {self.path}: {exc}") from exc
     def normalize(self) -> bytes:
         return self.normalize_with_summary().data

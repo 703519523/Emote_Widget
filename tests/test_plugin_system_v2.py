@@ -21,6 +21,12 @@ class _StopMiddleware(Middleware):
         return {"stopped": True, "data": data}
 
 
+class _MarkerMiddleware(Middleware):
+    def process(self, data, next):
+        data.append("marker")
+        return next(data)
+
+
 class PluginSystemV2Tests(unittest.TestCase):
     def tearDown(self):
         event_bus.clear()
@@ -60,6 +66,32 @@ class PluginSystemV2Tests(unittest.TestCase):
         result = chain.execute("input", terminal=lambda _: self.fail("terminal called"))
 
         self.assertEqual(result, {"stopped": True, "data": "input"})
+
+    def test_middleware_can_remove_only_its_own_registration(self):
+        chain = MiddlewareManager.get_chain("test.cleanup")
+        first = _MarkerMiddleware()
+        second = _MarkerMiddleware()
+        chain.use(first)
+        chain.use(second)
+
+        chain.remove(first)
+
+        result = chain.execute([])
+        self.assertEqual(result, ["marker"])
+        self.assertEqual(chain.middlewares, [second])
+
+    def test_plugin_cleanup_preserves_other_plugins_middleware(self):
+        from plugins.psb_decryption.main import PsbDecryptionPlugin
+
+        chain = MiddlewareManager.get_chain("psb.normalize")
+        marker = _MarkerMiddleware()
+        chain.use(marker)
+        plugin = PsbDecryptionPlugin()
+        plugin.initialize()
+
+        plugin.cleanup()
+
+        self.assertEqual(chain.middlewares, [marker])
 
 
 if __name__ == "__main__":

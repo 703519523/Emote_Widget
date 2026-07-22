@@ -23,7 +23,9 @@ class IEmotePlugin(ABC):
 
     def __init__(self) -> None:
         super().__init__()
-        self.logger: logging.Logger
+        self.logger = logging.getLogger(
+            f"EmoteWidget.Plugin.{self.__class__.__name__}"
+        )
     
     @property
     def events(self):

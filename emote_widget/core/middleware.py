@@ -71,6 +71,15 @@ class MiddlewareChain:
         self._middlewares.append(middleware)
         logger.debug(f"[{self.name}] 注册中间件: {middleware.__class__.__name__} (共 {len(self._middlewares)} 个)")
     
+    @property
+    def middlewares(self):
+        return list(self._middlewares)
+
+    def remove(self, middleware: Middleware) -> None:
+        if middleware in self._middlewares:
+            self._middlewares.remove(middleware)
+            logger.debug(f"[{self.name}] 移除中间件: {middleware.__class__.__name__}")
+
     def execute(
         self,
         data: Any,

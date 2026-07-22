@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from emote_widget.core.middleware import Middleware
 from emote_widget.core.plugin_interface import IEmotePlugin
-from emote_widget.utils.psb_converter import detect_shell, unwrap_psb
+from .psb_shell import detect_shell, unwrap_psb
 from .psb_crypto import PsbCryptoError, decrypt_psb
 from .ems_adapter import adapt_win_psb_to_ems
 
@@ -44,8 +44,12 @@ class PsbDecryptionPlugin(IEmotePlugin):
         return "Optional PSB XorShift128 decryption middleware"
 
     def initialize(self) -> None:
-        self.middleware.get_chain("psb.normalize").use(PsbDecryptionMiddleware())
+        self._middleware = PsbDecryptionMiddleware()
+        self.middleware.get_chain("psb.normalize").use(self._middleware)
         self.logger.info("PSB decryption middleware enabled")
 
     def cleanup(self) -> None:
-        self.middleware.clear_chain("psb.normalize")
+        middleware = getattr(self, "_middleware", None)
+        if middleware is not None:
+            self.middleware.get_chain("psb.normalize").remove(middleware)
+            self._middleware = None

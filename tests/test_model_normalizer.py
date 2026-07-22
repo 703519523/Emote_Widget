@@ -72,11 +72,22 @@ class ModelNormalizerTests(unittest.TestCase):
             self.assertEqual(result, source)
             normalizer_cls.assert_not_called()
 
+    def test_core_normalizer_rejects_wrapped_input(self):
+        from emote_widget.utils.psb_converter import PsbNormalizer, PsbNormalizerError
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "wrapped.psb"
+            source.write_bytes(b"PSZ\0not handled by core")
+
+            with self.assertRaises(PsbNormalizerError):
+                PsbNormalizer(source).normalize_with_summary()
+
     def test_real_lz4_win_rgba8_model_is_adapted_for_ems_driver(self):
         source = Path("models/dx_e-moteアズキ私服a.psb")
         self.assertTrue(source.exists(), "real wrapped regression fixture is missing")
 
-        from emote_widget.utils.psb_converter import PsbReader, unwrap_psb
+        from emote_widget.utils.psb_converter import PsbReader
+        from plugins.psb_decryption.psb_shell import unwrap_psb
         from plugins.psb_decryption.psb_crypto import decrypt_psb
         from plugins.psb_decryption.ems_adapter import adapt_win_psb_to_ems
 
