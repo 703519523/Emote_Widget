@@ -4,6 +4,7 @@ from emote_widget.core.middleware import Middleware
 from emote_widget.core.plugin_interface import IEmotePlugin
 from emote_widget.utils.psb_converter import detect_shell, unwrap_psb
 from .psb_crypto import PsbCryptoError, decrypt_psb
+from .ems_adapter import adapt_win_psb_to_ems
 
 
 class PsbDecryptionMiddleware(Middleware):
@@ -21,7 +22,10 @@ class PsbDecryptionMiddleware(Middleware):
             # Plain PSB files continue through the built-in normalizer.
             return next(data)
 
-        data["normalized_data"] = decrypted.data
+        normalized_data = decrypted.data
+        # Platform conversion is also an optional extension responsibility.
+        normalized_data = adapt_win_psb_to_ems(normalized_data)
+        data["normalized_data"] = normalized_data
         data["shell"] = shell
         data["crypto_summary"] = {
             "source_header_encrypted": decrypted.header_was_encrypted,

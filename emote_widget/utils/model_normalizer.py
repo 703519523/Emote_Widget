@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Union
 
 from emote_widget.core.middleware import MiddlewareManager
-from .psb_converter import PsbNormalizer, adapt_win_psb_to_ems, detect_shell
+from .psb_converter import PsbNormalizer, detect_shell
 
 
 StrPath = Union[str, os.PathLike[str]]
@@ -32,12 +32,10 @@ def _normalize_model_path_default(context: dict) -> dict:
         context["normalized_path"] = source
         return context
     else:
-        result = PsbNormalizer(source).normalize_with_summary()
-        normalized_data = result.data
-        context["summary"] = result.summary
-    if result.summary.get("spec") == "win":
-        normalized_data = adapt_win_psb_to_ems(normalized_data)
-
+        raise ValueError(
+            f"{source}: wrapped PSB input requires an extension plugin; "
+            "the core loader accepts only raw/pure PSB files"
+        )
     source_digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
     cache_dir = Path(cache_root).resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 
-from .psb_reader import PsbBadFormatError, PsbReader, PsbResourceRef
+from emote_widget.utils.psb_converter.psb_reader import PsbBadFormatError, PsbReader, PsbResourceRef
 
 
 def _iter_texture_descriptors(value: Any) -> Iterator[dict[str, Any]]:

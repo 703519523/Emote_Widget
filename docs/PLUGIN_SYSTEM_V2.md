@@ -174,6 +174,13 @@ event_bus.emit("player.ready", {...})  ← 事件3
 
 ### Phase 2: 核心集成 🚧（进行中）
 
+#### 输入边界约定
+
+- 核心模型加载器在没有扩展插件时只接受 raw/pure `PSB\0`。
+- Shell 脱壳、加密解密、平台适配等属于插件能力，不应重新耦合回核心。
+- 插件通过 `psb.normalize` Middleware 提供 `normalized_data`，再由核心完成结构校验和缓存。
+- 当前参考扩展：`plugins/psb_decryption/`，负责 Shell、XorShift128 和 Win→EMS 适配。
+
 #### 2.1 Controller 事件集成
 
 **文件**：`emote_widget/core/controller.py`
