@@ -11,6 +11,10 @@ EmoteWidget 是一个基于 PySide6、Qt WebEngine 和 JavaScript 前端的动�
 1. **Qt Widgets**：`EmoteWidget`，适合传统 QWidget 应用。
 2. **Qt Quick/QML**：`EmoteWidgetQml`，适合 QML 应用，通过属性、信号和槽与 QML 交互。
 
+插件系统 v2 的详细设计、事件目录、中间件调用约定和实施计划见
+[`docs/PLUGIN_SYSTEM_V2.md`](PLUGIN_SYSTEM_V2.md)。本文只保留整体架构和真实调用链；
+插件扩展点的具体约定以该文档为准。
+
 项目的核心不是某一个窗口类，而是下面这条依赖链：
 
 ```text

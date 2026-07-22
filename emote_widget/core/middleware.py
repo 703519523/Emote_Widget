@@ -11,7 +11,7 @@
 - 资源预处理
 """
 
-from typing import Callable, Any, Dict, List
+from typing import Callable, Any, Dict, List, Optional
 from abc import ABC, abstractmethod
 import logging
 
@@ -71,7 +71,11 @@ class MiddlewareChain:
         self._middlewares.append(middleware)
         logger.debug(f"[{self.name}] 注册中间件: {middleware.__class__.__name__} (共 {len(self._middlewares)} 个)")
     
-    def execute(self, data: Any) -> Any:
+    def execute(
+        self,
+        data: Any,
+        terminal: Optional[Callable[[Any], Any]] = None,
+    ) -> Any:
         """
         执行中间件链。
         
@@ -83,10 +87,10 @@ class MiddlewareChain:
         """
         logger.debug(f"[{self.name}] 开始执行中间件链 (共 {len(self._middlewares)} 个中间件)")
         
-        def create_next(index: int) -> Callable:
+        def create_next(index: int) -> Callable[[Any], Any]:
             if index >= len(self._middlewares):
-                # 最后一个中间件，直接返回数据
-                return lambda d: d
+                # 允许调用方提供默认处理器；未提供时保持旧的透传行为。
+                return terminal if terminal is not None else (lambda d: d)
             
             def next_func(d: Any) -> Any:
                 middleware = self._middlewares[index]

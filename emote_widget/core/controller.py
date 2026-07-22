@@ -31,6 +31,7 @@ from emote_widget.core.adapter_interface import IViewAdapter
 from emote_widget.core.lipsync_thread import StreamLipSyncThread
 from emote_widget.core.plugin_system import PluginAccessor, PluginLoaderWorker
 from emote_widget.core.plugin_interface import IEmotePlugin
+from emote_widget.core.event_bus import event_bus
 from emote_widget.core.python_api_bridge import PythonApiBridge
 from emote_widget.core.task_dispatcher import EmoteTaskDispatcher, TaskType
 from emote_widget.utils.controller_proxy import SandboxProxy, PoisonPillProxy
@@ -585,6 +586,11 @@ class EmoteController(QObject):
             logger.info(f"自省完成，已绑定 {len(self.variable_map)} 个参数。")
             self._player_is_ready = True
             self.player_ready.emit(timelines)
+            event_bus.emit("player.ready", {
+                "timelines": list(timelines),
+                "parameters": self.variable_map,
+                "model": self.current_model_filename,
+            })
             self._check_if_all_ready()
 
         self.get_variables(on_variables_received)
@@ -616,6 +622,9 @@ class EmoteController(QObject):
             4. 停止任务调度器。
         """
         logger.info("EmoteController: 开始清理资源...")
+        event_bus.emit("controller.cleanup", {
+            "model": self.current_model_filename,
+        })
         
         # 1. 停止口型同步
         self.stop_lip_sync()
@@ -726,12 +735,14 @@ class EmoteController(QObject):
         Args:
             path_or_name (str): 模型文件的名称或路径 (例如 "chara.psb")。
         """
+        event_bus.emit("model.before_load", {"path": path_or_name})
         self.current_model_filename = os.path.basename(path_or_name)
         
         model_url = resolve_resource_url(path_or_name, 'models')
         
         if not model_url:
             logger.error(f"无法加载模型，路径无效: {path_or_name}")
+            event_bus.emit("model.load_failed", {"path": path_or_name})
             return
 
         logger.info(f"加载模型 URL: {model_url}")
@@ -883,6 +894,10 @@ class EmoteController(QObject):
         Args:
             timeline_name (str): 动画名称。
         """
+        event_bus.emit("animation.play", {
+            "name": timeline_name,
+            "model": self.current_model_filename,
+        })
         safe_name = json.dumps(timeline_name)
         self._safe_run(f'{self.js_player_name}.mainTimelineLabel = {safe_name};')
 
@@ -1269,6 +1284,12 @@ class EmoteController(QObject):
             value (float): 目标值。
             duration_ms (int): 过渡时长。
         """
+        event_bus.emit("parameter.changed", {
+            "name": name,
+            "value": value,
+            "duration_ms": duration_ms,
+            "model": self.current_model_filename,
+        })
         safe_name = json.dumps(name)
         self._safe_run(f'{self.js_player_name}.setVariable({safe_name}, {value}, {duration_ms});')
 

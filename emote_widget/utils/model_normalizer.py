@@ -7,23 +7,21 @@ import os
 from pathlib import Path
 from typing import Union
 
+from emote_widget.core.middleware import MiddlewareManager
 from .psb_converter import PsbNormalizer, adapt_win_psb_to_ems, detect_shell
 
 
 StrPath = Union[str, os.PathLike[str]]
 
 
-def normalize_model_path(path: StrPath, *, cache_root: StrPath = ".emote_cache/normalized_models") -> Path:
-    """Validate a PSB and cache an unwrapped copy when necessary.
+def _normalize_model_path_default(context: dict) -> dict:
+    """Run the built-in model normalizer for a middleware context."""
+    source = Path(context["source_path"]).resolve()
+    cache_root = context["cache_root"]
 
-    Raw ``PSB\0`` files keep the legacy loader path because existing Emote models
-    may legitimately use ``spec=ems``. Wrapped files are strictly normalized;
-    supported Win/RGBA8 payloads are adapted for the bundled EMS driver before
-    being written to cache. The original resource is never modified.
-    """
-    source = Path(path).resolve()
     if detect_shell(source.read_bytes()) == "raw":
-        return source
+        context["normalized_path"] = source
+        return context
 
     result = PsbNormalizer(source).normalize_with_summary()
     normalized_data = result.data
@@ -40,4 +38,28 @@ def normalize_model_path(path: StrPath, *, cache_root: StrPath = ".emote_cache/n
         temporary.write_bytes(normalized_data)
         os.replace(temporary, target)
 
-    return target
+    context["normalized_path"] = target
+    context["summary"] = result.summary
+    return context
+
+
+def normalize_model_path(path: StrPath, *, cache_root: StrPath = ".emote_cache/normalized_models") -> Path:
+    """Validate a PSB and cache an unwrapped copy when necessary.
+
+    Raw ``PSB\0`` files keep the legacy loader path because existing Emote models
+    may legitimately use ``spec=ems``. Wrapped files are strictly normalized;
+    supported Win/RGBA8 payloads are adapted for the bundled EMS driver before
+    being written to cache. The original resource is never modified.
+    """
+    context = {
+        "source_path": Path(path).resolve(),
+        "cache_root": Path(cache_root),
+        "normalized_path": None,
+        "summary": None,
+    }
+    chain = MiddlewareManager.get_chain("psb.normalize")
+    result = chain.execute(context, terminal=_normalize_model_path_default)
+    normalized_path = result.get("normalized_path")
+    if not isinstance(normalized_path, Path):
+        raise ValueError("psb.normalize middleware did not provide normalized_path")
+    return normalized_path

@@ -16,12 +16,42 @@ class IEmotePlugin(ABC):
                 插件应该使用这个logger而不是print()来输出信息。
         controller: EmoteController 的引用，提供与主程序交互的API。
                     在 initialize() 被调用前，此属性将由框架注入。
+        events: (v2新增) 便捷访问全局事件总线，用于订阅和触发事件。
+        middleware: (v2新增) 便捷访问中间件管理器，用于注册数据流中间件。
     """
     controller: "EmoteController"
 
     def __init__(self) -> None:
         super().__init__()
         self.logger: logging.Logger
+    
+    @property
+    def events(self):
+        """
+        便捷访问全局事件总线（插件系统 v2）。
+        
+        用于订阅和触发生命周期事件。
+        
+        示例:
+            >>> self.events.on("model.loaded", self.on_model_loaded)
+            >>> self.events.emit("custom.event", {"data": "value"})
+        """
+        from .event_bus import event_bus
+        return event_bus
+    
+    @property
+    def middleware(self):
+        """
+        便捷访问中间件管理器（插件系统 v2）。
+        
+        用于注册和管理数据流水线中间件。
+        
+        示例:
+            >>> chain = self.middleware.get_chain("psb.normalize")
+            >>> chain.use(MyMiddleware())
+        """
+        from .middleware import MiddlewareManager
+        return MiddlewareManager
 
     @abstractmethod
     def get_name(self) -> str:
