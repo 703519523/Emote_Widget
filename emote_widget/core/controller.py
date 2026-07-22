@@ -38,7 +38,13 @@ from emote_widget.utils.controller_proxy import SandboxProxy, PoisonPillProxy
 
 import emote_widget.utils.bound_params as bound_params
 from emote_widget.utils.audio_utils import stream_audio_file
-from emote_widget.utils.paths import resolve_resource_url, add_resource_directory, scan_directory_for_resources, is_path_allowed
+from emote_widget.utils.paths import (
+    resolve_resource_url,
+    ResourceNormalizationError,
+    add_resource_directory,
+    scan_directory_for_resources,
+    is_path_allowed,
+)
 # Access private members to implement strict list_available_resources logic
 from emote_widget.utils.paths import RESOURCE_SEARCH_PATHS, WEB_FRONTEND_ROOT
 
@@ -166,6 +172,7 @@ class EmoteController(QObject):
         self._plugin_loader_worker.progress_updated.connect(self._update_splash_plugin_progress)
         self._plugin_loader_worker.log_message.connect(self._add_splash_log)
         self._plugin_loader_worker.finished.connect(self._on_plugins_load_finished)
+        self._plugin_loader_worker.finished.connect(self._plugin_loader_thread.quit)
         self._plugin_loader_thread.started.connect(self._plugin_loader_worker.run_loading)
 
         self._splash_start_time: float = 0.0
@@ -738,11 +745,23 @@ class EmoteController(QObject):
         event_bus.emit("model.before_load", {"path": path_or_name})
         self.current_model_filename = os.path.basename(path_or_name)
         
-        model_url = resolve_resource_url(path_or_name, 'models')
+        try:
+            model_url = resolve_resource_url(path_or_name, 'models')
+        except ResourceNormalizationError as exc:
+            logger.error(f"模型处理失败，拒绝加载 '{path_or_name}': {exc}")
+            event_bus.emit("model.load_failed", {
+                "path": path_or_name,
+                "reason": "normalization",
+                "error": str(exc),
+            })
+            return
         
         if not model_url:
-            logger.error(f"无法加载模型，路径无效: {path_or_name}")
-            event_bus.emit("model.load_failed", {"path": path_or_name})
+            logger.error(f"无法加载模型，资源不存在或不可访问: {path_or_name}")
+            event_bus.emit("model.load_failed", {
+                "path": path_or_name,
+                "reason": "not_found",
+            })
             return
 
         logger.info(f"加载模型 URL: {model_url}")

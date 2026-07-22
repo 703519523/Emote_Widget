@@ -1,4 +1,5 @@
 import unittest
+import inspect
 
 from emote_widget.core.event_bus import EventBus, event_bus
 from emote_widget.core.middleware import Middleware, MiddlewareManager
@@ -92,6 +93,15 @@ class PluginSystemV2Tests(unittest.TestCase):
         plugin.cleanup()
 
         self.assertEqual(chain.middlewares, [marker])
+
+    def test_plugin_loader_worker_finishes_by_stopping_its_thread(self):
+        from emote_widget.core.controller import EmoteController
+
+        source = inspect.getsource(EmoteController.__init__)
+        self.assertIn(
+            "self._plugin_loader_worker.finished.connect(self._plugin_loader_thread.quit)",
+            source,
+        )
 
 
 if __name__ == "__main__":

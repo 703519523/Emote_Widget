@@ -82,6 +82,24 @@ class ModelNormalizerTests(unittest.TestCase):
             with self.assertRaises(PsbNormalizerError):
                 PsbNormalizer(source).normalize_with_summary()
 
+    def test_model_resource_normalization_error_is_not_reported_as_missing_path(self):
+        from emote_widget.utils.paths import ResourceNormalizationError
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "broken.psb"
+            source.write_bytes(b"PSB\0broken")
+
+            with patch(
+                "emote_widget.utils.paths.normalize_model_path",
+                side_effect=ValueError("cannot adapt spec='krkr' to EMS"),
+            ):
+                from emote_widget.utils.paths import resolve_resource_url
+
+                with self.assertRaises(ResourceNormalizationError) as raised:
+                    resolve_resource_url(str(source), "models")
+
+            self.assertIn("cannot adapt spec='krkr' to EMS", str(raised.exception))
+
     def test_real_lz4_win_rgba8_model_is_adapted_for_ems_driver(self):
         source = Path("models/dx_e-moteアズキ私服a.psb")
         self.assertTrue(source.exists(), "real wrapped regression fixture is missing")

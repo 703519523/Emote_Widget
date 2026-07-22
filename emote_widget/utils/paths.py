@@ -8,6 +8,10 @@ from PySide6.QtCore import QUrl
 from .logger import file_logger as logger
 from .model_normalizer import normalize_model_path
 
+
+class ResourceNormalizationError(ValueError):
+    """A resource exists, but its model data cannot be prepared for loading."""
+
 # 动态计算包内 web_frontend 的绝对路径
 # 结构: emote_widget/utils/paths.py -> (up) -> emote_widget/ -> (down) -> web_frontend
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -221,7 +225,9 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
                     final_path = str(normalized_path)
             except Exception as exc:
                 logger.error(f"PSB 模型规范化失败，拒绝加载 '{final_path}': {exc}")
-                return None
+                raise ResourceNormalizationError(
+                    f"model normalization failed for '{final_path}': {exc}"
+                ) from exc
 
         # [Security] 二次校验：确保解析出的绝对路径在白名单内
         if not is_path_allowed(final_path):
