@@ -1,4 +1,6 @@
+import hashlib
 import inspect
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +13,8 @@ from emote_widget.core.middleware import Middleware
 
 class ModelNormalizerTests(unittest.TestCase):
     WRAPPED_WIN_FIXTURE = Path("test_models/dx_e-moteアズキ私服a.psb")
+    PSP_SHA256 = "72e4b8e539e75d32bb2c4a4faa4cce71ecdf25edacf6929559365b23a368b941"
+    PSP_PAYLOAD_SHA256 = "2f48682545795cac2cc135e95fd13b5004ba9a6f8ed8d391f12f43f1ca8d96d7"
 
     def tearDown(self):
         MiddlewareManager.clear_all()
@@ -19,6 +23,16 @@ class ModelNormalizerTests(unittest.TestCase):
         if not self.WRAPPED_WIN_FIXTURE.exists():
             self.skipTest("local wrapped Win PSB fixture is not available")
         return self.WRAPPED_WIN_FIXTURE
+
+    def _require_named_fixture(self, name_fragment):
+        root = Path("test_models")
+        fixture = next(
+            (path for path in root.glob("*") if name_fragment in path.name),
+            None,
+        )
+        if fixture is None:
+            self.skipTest(f"local {name_fragment} fixture is not available")
+        return fixture
 
     def test_extension_normalizes_real_wrapped_model_to_ems(self):
         from emote_widget.utils.model_normalizer import normalize_model_path
@@ -89,6 +103,38 @@ class ModelNormalizerTests(unittest.TestCase):
             with self.assertRaises(PsbNormalizerError):
                 PsbNormalizer(source).normalize_with_summary()
 
+    def test_psb_plugin_detects_and_unwraps_psp_lzss_literals(self):
+        from plugins.psb_decryption.psb_shell import detect_shell, unwrap_psb
+
+        payload = b"PSB\0test"
+        shell = struct.pack("<I", len(payload)) + b"\xff" + payload
+
+        self.assertEqual(detect_shell(shell), "psp")
+        unwrapped = unwrap_psb(shell)
+        self.assertEqual(unwrapped.shell, "psp")
+        self.assertEqual(unwrapped.data, payload)
+
+    def test_psb_plugin_psp_lzss_rejects_truncated_stream(self):
+        from plugins.psb_decryption.psb_shell import PsbShellError, unwrap_psb
+
+        shell = struct.pack("<I", 8) + b"\xffPSB"
+
+        with self.assertRaisesRegex(PsbShellError, "truncated PSP LZSS stream"):
+            unwrap_psb(shell)
+
+    def test_real_psp_lzss_shell_matches_fixed_oracle(self):
+        from plugins.psb_decryption.psb_shell import detect_shell, unwrap_psb
+
+        source = self._require_named_fixture("PSP(shell)")
+        wrapped = source.read_bytes()
+        self.assertEqual(len(wrapped), 5_860_942)
+        self.assertEqual(hashlib.sha256(wrapped).hexdigest(), self.PSP_SHA256)
+        self.assertEqual(detect_shell(wrapped), "psp")
+
+        payload = unwrap_psb(wrapped).data
+        self.assertEqual(len(payload), 27_705_408)
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), self.PSP_PAYLOAD_SHA256)
+
     def test_model_resource_normalization_error_is_not_reported_as_missing_path(self):
         from emote_widget.utils.paths import ResourceNormalizationError
 
@@ -132,6 +178,46 @@ class ModelNormalizerTests(unittest.TestCase):
         self.assertEqual(converted[after_start + 1], raw[before_start + 1])
         self.assertEqual(converted[after_start + 2], raw[before_start])
         self.assertEqual(converted[after_start + 3], raw[before_start + 3])
+
+    def test_win_bgra_conversion_returns_immutable_ems_rgba_bytes(self):
+        from plugins.psb_decryption.ems_adapter import _bgr_to_rgb
+
+        source = bytearray(b"\x10\x20\x30\x40\xaa\xbb\xcc\xdd")
+
+        converted = _bgr_to_rgb(source)
+
+        self.assertIsInstance(converted, bytes)
+        self.assertEqual(converted, b"\x30\x20\x10\x40\xcc\xbb\xaa\xdd")
+        self.assertEqual(source, bytearray(b"\x10\x20\x30\x40\xaa\xbb\xcc\xdd"))
+
+    def test_flatten_array_win_texture_converts_bgra_and_preserves_extra_resources(self):
+        from plugins.psb_decryption.ems_adapter import adapt_win_psb_to_ems
+        from plugins.psb_decryption.psb_crypto import decrypt_psb
+        from plugins.psb_decryption.psb_reader import PsbReader
+        from plugins.psb_decryption.psb_shell import unwrap_psb
+
+        source = self._require_named_fixture("FlattenArray")
+        raw = decrypt_psb(unwrap_psb(source.read_bytes()).data).data
+        before = PsbReader(raw, load_resource_data=True).parse()
+        converted = adapt_win_psb_to_ems(raw)
+        after = PsbReader(converted, load_resource_data=True).parse()
+
+        self.assertEqual(before["spec"], "win")
+        self.assertEqual(after["spec"], "ems")
+        self.assertEqual(len(before["extra_resources"]), 136)
+        self.assertEqual(
+            [item["data"] for item in after["extra_resources"]],
+            [item["data"] for item in before["extra_resources"]],
+        )
+
+        source_atlas = before["resources"][0]["data"]
+        converted_atlas = after["resources"][0]["data"]
+        self.assertEqual(len(source_atlas), 2048 * 2048 * 4)
+        self.assertEqual(len(converted_atlas), len(source_atlas))
+        self.assertEqual(converted_atlas[0::4], source_atlas[2::4])
+        self.assertEqual(converted_atlas[1::4], source_atlas[1::4])
+        self.assertEqual(converted_atlas[2::4], source_atlas[0::4])
+        self.assertEqual(converted_atlas[3::4], source_atlas[3::4])
 
     def test_psb_plugin_contains_freemote_rl_codec(self):
         from plugins.psb_decryption.rle_compress import compress, decompress

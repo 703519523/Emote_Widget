@@ -109,6 +109,12 @@ def adapt_win_psb_to_ems(data: bytes) -> bytes:
         root["spec"] = "ems"
         regular = _extract_resource_bytes(data, header, parsed["resources"], False)
         extra = _extract_resource_bytes(data, header, parsed["extra_resources"], True)
+        # Win RGBA8 is little-endian ARGB as consumed by System.Drawing
+        # (memory bytes BGRA). EMS expects byte-order RGBA. This is the same
+        # R/B conversion performed by C# ConvertToImage +
+        # GetPixelBytesFromImage when switching the platform.
+        for resource_index in resources_to_convert:
+            regular[resource_index] = _bgr_to_rgb(regular[resource_index])
         prepared_root = _prepare_root_for_compiler(root, regular, extra)
         return PsbCompiler(version=header["version"]).compile(prepared_root)
 
@@ -454,13 +460,13 @@ def _fix_timeline_content_values(value: Any) -> None:
             _fix_timeline_content_values(child)
 
 
-def _bgr_to_rgb_inplace(data: bytearray | bytes) -> None:
-    """Swap B and R channels in BGRA data (inplace for bytearray)."""
-    if isinstance(data, bytes):
-        data = bytearray(data)
+def _bgr_to_rgb(data: bytearray | bytes) -> bytes:
+    """Convert BGRA memory bytes to RGBA and return immutable bytes."""
+    converted = bytearray(data)
 
-    for i in range(0, len(data), 4):
-        data[i], data[i + 2] = data[i + 2], data[i]
+    for i in range(0, len(converted), 4):
+        converted[i], converted[i + 2] = converted[i + 2], converted[i]
+    return bytes(converted)
 
 
 def _update_texture_metadata_for_ems(obj: Any) -> None:

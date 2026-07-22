@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import struct
 import zlib
 
 
@@ -18,6 +19,7 @@ class UnwrappedPsb:
 
 LZ4_FRAME_MAGIC = b"\x04\x22\x4D\x18"
 PSZ_MAGIC = b"PSZ\0"
+PSP_EMBEDDED_MAGIC_OFFSET = 5
 
 
 def detect_shell(data: bytes) -> str:
@@ -27,6 +29,10 @@ def detect_shell(data: bytes) -> str:
         return "psz"
     if data.startswith(LZ4_FRAME_MAGIC):
         return "lz4"
+    # FreeMote PspShell identifies this LZSS container by the decompressed
+    # PSB signature appearing at offset 5 (size + first control byte).
+    if len(data) >= 8 and data[PSP_EMBEDDED_MAGIC_OFFSET:8] == b"PSB":
+        return "psp"
     if data[:3].lower() == b"mdf":
         return "mdf"
     return "unknown"
@@ -40,7 +46,6 @@ def unwrap_psb(data: bytes) -> UnwrappedPsb:
         if len(data) < 16:
             raise PsbShellError("truncated PSZ shell")
         # PSZ header: "PSZ\0" (4) + zipped_len (4) + ori_len (4) + reserved (4)
-        import struct
         zipped_len, ori_len, _ = struct.unpack("<III", data[4:16])
         # C# PszShell reads the two zlib header bytes for metadata and then
         # rewinds them through the underlying stream. ``zipped_len`` is the
@@ -68,6 +73,45 @@ def unwrap_psb(data: bytes) -> UnwrappedPsb:
             pure = lz4.frame.decompress(data)
         except RuntimeError as exc:
             raise PsbShellError(f"invalid LZ4 frame: {exc}") from exc
+    elif shell == "psp":
+        if len(data) < 5:
+            raise PsbShellError("truncated PSP shell")
+        unpacked_size = struct.unpack_from("<I", data)[0]
+        if unpacked_size < 4:
+            raise PsbShellError(f"invalid PSP decompressed size: {unpacked_size}")
+        frame = bytearray(0x1000)
+        frame_position = 1
+        source_position = 4
+        output = bytearray()
+        try:
+            while len(output) < unpacked_size:
+                control = data[source_position]
+                source_position += 1
+                bit = 1
+                while len(output) < unpacked_size and bit != 0x100:
+                    if control & bit:
+                        value = data[source_position]
+                        source_position += 1
+                        frame[frame_position & 0xFFF] = value
+                        frame_position += 1
+                        output.append(value)
+                    else:
+                        high = data[source_position]
+                        low = data[source_position + 1]
+                        source_position += 2
+                        offset = (high << 4) | (low >> 4)
+                        for _ in range(2 + (low & 0xF)):
+                            value = frame[offset & 0xFFF]
+                            offset += 1
+                            frame[frame_position & 0xFFF] = value
+                            frame_position += 1
+                            output.append(value)
+                    bit <<= 1
+        except IndexError as exc:
+            raise PsbShellError(
+                f"truncated PSP LZSS stream at input offset {source_position}"
+            ) from exc
+        pure = bytes(output[:unpacked_size])
     elif shell == "mdf":
         if len(data) < 10:
             raise PsbShellError("truncated MDF shell")
