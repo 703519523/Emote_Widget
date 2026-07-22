@@ -127,6 +127,15 @@ class ModelNormalizerTests(unittest.TestCase):
         self.assertEqual(converted[start + 2], raw[start])
         self.assertEqual(converted[start + 3], raw[start + 3])
 
+    def test_psb_plugin_contains_freemote_rl_codec(self):
+        from plugins.psb_decryption.rle_compress import compress, decompress
+
+        pixels = (b"\x10\x20\x30\xff" * 8) + bytes(range(32))
+        encoded = compress(pixels, align=4)
+
+        self.assertNotEqual(encoded, pixels)
+        self.assertEqual(decompress(encoded, align=4, actual_size=len(pixels)), pixels)
+
 
 if __name__ == "__main__":
     unittest.main()

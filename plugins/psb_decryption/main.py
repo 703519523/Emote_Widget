@@ -41,7 +41,7 @@ class PsbDecryptionPlugin(IEmotePlugin):
         return "psb_decryption"
 
     def get_description(self) -> str:
-        return "Optional PSB XorShift128 decryption middleware"
+        return "Optional PSB shell/decryption middleware with Win/KrKr to EMS conversion"
 
     def initialize(self) -> None:
         self._middleware = PsbDecryptionMiddleware()
