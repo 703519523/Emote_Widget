@@ -18,7 +18,7 @@ import time
 import uuid
 import queue
 import threading
-from typing import Callable, Any, Optional, Dict, List, Union, cast, Tuple
+from typing import Callable, Any, Optional, Dict, List, Union, cast, Tuple, TypedDict
 import numpy as np
 from numpy.typing import NDArray
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QTimer
@@ -48,11 +48,23 @@ from emote_widget.utils.paths import (
     add_resource_directory,
     scan_directory_for_resources,
     is_path_allowed,
+    consume_last_model_health_report,
 )
 # Access private members to implement strict list_available_resources logic
 from emote_widget.utils.paths import RESOURCE_SEARCH_PATHS, WEB_FRONTEND_ROOT
 
 from emote_widget.utils.logger import emote_widget_logger as logger
+
+
+class _ModelSnapshot(TypedDict):
+    """加载新模型前保存的旧模型运行时状态。"""
+
+    filename: str
+    player_ready: bool
+    state: str
+    variable_map: bound_params.BoundMap
+    mouth_param_info: Optional[bound_params.BoundMapItem]
+    health_report: Optional[Dict[str, Any]]
 
 class EmoteController(QObject):
     """
@@ -75,6 +87,9 @@ class EmoteController(QObject):
         variable_map (BoundMap): 模型参数绑定映射表，用于解析语义化名称（如 "mouth_open"）到底层 ID。
     """
     
+    model_health_warning = Signal(str, list)
+    model_load_failed = Signal(str, str, str, bool)
+    model_load_succeeded = Signal(str, dict)
     player_ready = Signal(list)
     """
     Signal(list): 当模型成功加载并完成参数自省时发射。
@@ -189,6 +204,14 @@ class EmoteController(QObject):
         self._is_splash_dismissed: bool = False
         self._plugins_are_ready: bool = False
         self._player_is_ready: bool = False
+        self._model_state: str = "idle"
+        self._active_load_id: Optional[str] = None
+        self._requested_model_filename: Optional[str] = None
+        self._active_health_report: Optional[Dict[str, Any]] = None
+        self._previous_model_snapshot: Optional[_ModelSnapshot] = None
+        self._load_timeout_timer = QTimer(self)
+        self._load_timeout_timer.setSingleShot(True)
+        self._load_timeout_timer.timeout.connect(self._on_model_load_timeout)
 
         # 音频同步
         self._lip_sync_thread: Optional[StreamLipSyncThread] = None
@@ -214,6 +237,8 @@ class EmoteController(QObject):
         self._bridge.on_character_hovered_signal.connect(self.on_character_hovered)
         
         self._bridge.player_ready_signal.connect(self._on_player_ready_handler)
+        self._bridge.model_load_succeeded_signal.connect(self._on_model_load_succeeded)
+        self._bridge.model_load_failed_signal.connect(self._on_model_load_failed)
         self._bridge.query_result_signal.connect(self._handle_query_result)
         self._bridge.render_mask_updated_signal.connect(self._handle_render_mask_update)
         self._bridge.render_mask_binary_signal.connect(self._handle_render_mask_binary)
@@ -395,6 +420,9 @@ class EmoteController(QObject):
         Args:
             js_code (str): 要执行的 JavaScript 代码片段。
         """
+        if self._model_state in {"validating", "loading", "introspecting", "failed", "recovering"}:
+            logger.debug(f"模型状态为 {self._model_state}，指令已拒绝: {js_code[:50]}...")
+            return
         if not self._player_is_ready:
             self._command_queue.append(js_code)
             logger.debug(f"模型未就绪，指令已缓存: {js_code[:50]}...")
@@ -506,7 +534,9 @@ class EmoteController(QObject):
         """
         logger.info(f"模型 '{self.current_model_filename}' JS对象已就绪。")
         
+        # 兼容旧版 player_ready Bridge；新版加载通过结构化成功回调进入自省阶段。
         self._player_is_ready = True
+        self._model_state = "introspecting"
 
         if self._command_queue:
             logger.info(f"正在执行 {len(self._command_queue)} 条缓存指令...")
@@ -600,6 +630,13 @@ class EmoteController(QObject):
                         bound_params.update_cache(self.current_model_filename, self.variable_map)
             logger.info(f"自省完成，已绑定 {len(self.variable_map)} 个参数。")
             self._player_is_ready = True
+            self._model_state = "ready"
+            if self._requested_model_filename:
+                self.current_model_filename = self._requested_model_filename
+            self.model_load_succeeded.emit(
+                self.current_model_filename or "",
+                self._active_health_report or {},
+            )
             self.player_ready.emit(timelines)
             event_bus.emit("player.ready", {
                 "timelines": list(timelines),
@@ -788,31 +825,126 @@ class EmoteController(QObject):
         Args:
             path_or_name (str): 模型文件的名称或路径 (例如 "chara.psb")。
         """
-        event_bus.emit("model.before_load", {"path": path_or_name})
-        self.current_model_filename = os.path.basename(path_or_name)
+        load_id = str(uuid.uuid4())
+        self._previous_model_snapshot = None
+        if self.current_model_filename is not None:
+            self._previous_model_snapshot = {
+                "filename": self.current_model_filename,
+                "player_ready": self._player_is_ready,
+                "state": self._model_state,
+                "variable_map": self.variable_map,
+                "mouth_param_info": self.mouth_param_info,
+                "health_report": self._active_health_report,
+            }
+            self._command_queue.clear()
+        for callback in list(self._pending_queries.values()):
+            try:
+                callback(None)
+            except Exception:
+                pass
+        self._pending_queries.clear()
+        self._player_is_ready = False
+        self._model_state = "validating"
+        self._active_load_id = load_id
+        self._requested_model_filename = os.path.basename(path_or_name)
+        self._active_health_report = None
+        self.variable_map = {}
+        self.mouth_param_info = None
+        event_bus.emit("model.before_load", {"path": path_or_name, "load_id": load_id})
         
         try:
             model_url = resolve_resource_url(path_or_name, 'models')
         except ResourceNormalizationError as exc:
-            logger.error(f"模型处理失败，拒绝加载 '{path_or_name}': {exc}")
-            event_bus.emit("model.load_failed", {
-                "path": path_or_name,
-                "reason": "normalization",
-                "error": str(exc),
-            })
+            self._fail_model_load(path_or_name, "MODEL_VALIDATION_FAILED", str(exc), False)
             return
         
         if not model_url:
-            logger.error(f"无法加载模型，资源不存在或不可访问: {path_or_name}")
-            event_bus.emit("model.load_failed", {
-                "path": path_or_name,
-                "reason": "not_found",
-            })
+            self._fail_model_load(path_or_name, "MODEL_NOT_FOUND", "资源不存在或不可访问", False)
             return
 
+        report = consume_last_model_health_report()
+        if report is not None:
+            report_dict = report.to_dict()
+            self._active_health_report = report_dict
+            warnings = [item for item in report_dict["issues"] if item["severity"] == "warning"]
+            if warnings:
+                logger.warning(f"模型 '{path_or_name}' 疑似不完整: {len(warnings)} 项健康警告")
+                self.model_health_warning.emit(path_or_name, warnings)
+                event_bus.emit("model.health_warning", {
+                    "path": path_or_name, "load_id": load_id, "issues": warnings,
+                })
+
+        self._model_state = "loading"
         logger.info(f"加载模型 URL: {model_url}")
         safe_url = json.dumps(model_url)
-        self.view_adapter.run_javascript(f"loadNewModel({safe_url});")
+        safe_id = json.dumps(load_id)
+        self._load_timeout_timer.start(15000)
+        self.view_adapter.run_javascript(f"loadNewModel({safe_url}, {safe_id});")
+
+    def _on_model_load_timeout(self) -> None:
+        if self._model_state == "loading" and self._active_load_id:
+            self._fail_model_load(
+                self._requested_model_filename or "", "MODEL_LOAD_TIMEOUT",
+                "模型加载超过 15 秒，已取消等待", False,
+            )
+
+    def _on_model_load_succeeded(self, load_id: str, payload_json: str) -> None:
+        if load_id != self._active_load_id or self._model_state != "loading":
+            logger.debug(f"忽略过期模型成功回调: {load_id}")
+            return
+        self._load_timeout_timer.stop()
+        try:
+            payload: Any = json.loads(payload_json) if payload_json else {}
+        except (TypeError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        timelines: Any = payload.get("timelines", [])
+        if not isinstance(timelines, list):
+            timelines = []
+        if not timelines:
+            warning = [{
+                "code": "NO_RUNTIME_TIMELINES", "severity": "warning",
+                "message": "运行时未发现可用 timeline", "path": "runtime",
+                "details": {},
+            }]
+            self.model_health_warning.emit(self._requested_model_filename or "", warning)
+            event_bus.emit("model.health_warning", {
+                "path": self._requested_model_filename, "load_id": load_id, "issues": warning,
+            })
+        self._model_state = "introspecting"
+        self._on_player_ready_handler([str(item) for item in timelines])
+
+    def _on_model_load_failed(
+        self, load_id: str, code: str, message: str, stack: str, fatal: bool
+    ) -> None:
+        if load_id != self._active_load_id:
+            logger.debug(f"忽略过期模型失败回调: {load_id}")
+            return
+        if stack:
+            logger.debug(stack)
+        self._fail_model_load(self._requested_model_filename or "", code, message, fatal)
+
+    def _fail_model_load(self, path: str, code: str, message: str, fatal: bool) -> None:
+        self._load_timeout_timer.stop()
+        snapshot = self._previous_model_snapshot
+        if snapshot and snapshot["player_ready"] and not fatal:
+            self.current_model_filename = snapshot["filename"]
+            self._player_is_ready = True
+            self._model_state = "ready"
+            self.variable_map = snapshot["variable_map"]
+            self.mouth_param_info = snapshot["mouth_param_info"]
+            self._active_health_report = snapshot["health_report"]
+        else:
+            self._player_is_ready = False
+            self._model_state = "recovering" if fatal else "failed"
+        self._command_queue.clear()
+        logger.error(f"模型已拒绝加载 '{path}' [{code}]: {message}")
+        self.model_load_failed.emit(path, code, message, not fatal)
+        event_bus.emit("model.load_failed", {
+            "path": path, "load_id": self._active_load_id, "reason": code,
+            "error": message, "fatal": fatal,
+        })
 
     @Slot()
     def save_bindings(self) -> None:

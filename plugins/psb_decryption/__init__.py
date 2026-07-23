@@ -7,5 +7,15 @@ from .psb_crypto import (
     decrypt_psb,
     recover_header_key,
 )
+from .main import PsbDecryptionPlugin
 
 __version__ = "0.1.0"
+
+__all__ = [
+    "DecryptedPsb",
+    "PsbCryptoError",
+    "PsbDecryptionPlugin",
+    "PsbStreamContext",
+    "decrypt_psb",
+    "recover_header_key",
+]

@@ -188,6 +188,21 @@ class EmoteDevice
         // --- 修改结束 ---
         return true;
     }
+
+    // 释放设备级 native/WebGL 资源；由 releaseDevice 在引用计数归零时调用。
+    destroy() {
+        if (this.animating) {
+            this.animating = false;
+            cancelAnimationFrame(this.requestId);
+        }
+        for (const player of [...this.playerList]) {
+            player.invalidateDrawing();
+        }
+        this.playerList = [];
+        if (typeof EmoteDevice_Finish === 'function') {
+            EmoteDevice_Finish();
+        }
+    }
     
     // --- 修改开始 ---
     onResize(width, height) {
@@ -455,12 +470,16 @@ class EmotePlayer
         this._canvas = canvas;
         this.playerId = null;
         this.initialized = false;
+        // destroy() 可能由加载失败、切换模型和页面销毁多个路径调用，因此必须幂等。
+        this._destroyed = false;
         this.initMembers();
         EmotePlayer.requireDevice();
     }
 
     destroy() {
-        unloadData();
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this.unloadData();
         EmotePlayer.releaseDevice();
     }
 
@@ -1394,8 +1413,16 @@ EmotePlayer.requireDevice = () => {
 };
 
 EmotePlayer.releaseDevice = () => {
-    if (--sEmotePlayer.deviceRefCount <= 0) {
-        EmotePlayer.device.destroy();
+    // 本项目修改：统一使用 EmotePlayer 的静态引用计数，并防止重复释放导致计数变成负数。
+    if (EmotePlayer.deviceRefCount <= 0) {
+        EmotePlayer.deviceRefCount = 0;
+        return;
+    }
+    EmotePlayer.deviceRefCount -= 1;
+    if (EmotePlayer.deviceRefCount === 0) {
+        if (EmotePlayer.device) {
+            EmotePlayer.device.destroy();
+        }
         EmotePlayer.device = null;
     }
 };

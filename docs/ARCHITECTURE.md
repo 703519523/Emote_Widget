@@ -200,8 +200,8 @@ Controller 在 Player 就绪前缓存控制指令；Player 就绪后按调用顺
 `PluginLoaderWorker` 在 QThread 中扫描 `plugins/`，导入单文件插件或包含 `__init__.py` 的插件包，寻找 `IEmotePlugin` 子类并实例化。完成后 Controller 注册到 `PluginAccessor`。
 
 ```python
-controller.plugins.get("debug")
-controller.plugins.debug
+controller.plugins.get("example")
+controller.plugins.example
 ```
 
 QML 模式下，访问器会返回安全代理；插件公共方法还会被包装为 QML 可调用 Slot。插件清理由 Controller 的 `cleanup()` 统一协调。

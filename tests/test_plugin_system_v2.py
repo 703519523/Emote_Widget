@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 import tempfile
+from pathlib import Path
 
 from emote_widget.core.event_bus import EventBus, event_bus
 from emote_widget.core.middleware import Middleware, MiddlewareManager
@@ -137,6 +138,37 @@ class PluginSystemV2Tests(unittest.TestCase):
 
             self.assertEqual(worker.modules_to_load, ("enabled",))
 
+    def test_plugin_loader_instantiates_psb_package_plugin(self):
+        from emote_widget.core.plugin_system import PluginLoaderWorker
+
+        plugin_dir = Path(__file__).resolve().parents[1] / "plugins"
+        worker = PluginLoaderWorker(str(plugin_dir))
+        loaded = []
+        worker.finished.connect(loaded.extend)
+
+        worker.scan_for_plugin_modules()
+        worker.run_loading()
+
+        self.assertIn("psb_decryption", worker.modules_to_load)
+        self.assertIn("psb_decryption", [plugin.get_name() for plugin in loaded])
+
+    def test_example_plugin_demonstrates_safe_lifecycle_and_v2_extension_points(self):
+        example_path = Path(__file__).resolve().parents[1] / "plugins" / "example" / "main.py"
+        source = example_path.read_text(encoding="utf-8")
+
+        self.assertIn('return "example"', source)
+        self.assertIn("self.events.on(", source)
+        self.assertIn("self.middleware.get_chain(", source)
+        self.assertIn("player_ready.connect(", source)
+        self.assertIn("猴子补丁", source)
+        self.assertIn("不建议", source)
+
+    def test_example_plugin_exports_example_class(self):
+        init_path = Path(__file__).resolve().parents[1] / "plugins" / "example" / "__init__.py"
+        source = init_path.read_text(encoding="utf-8")
+
+        self.assertIn("ExamplePlugin", source)
+
     def test_rescan_replaces_stale_module_list_after_state_changes(self):
         from emote_widget.core.plugin_system import PluginLoaderWorker, PluginStateStore
 
@@ -180,6 +212,208 @@ class PluginSystemV2Tests(unittest.TestCase):
         self.assertTrue(callable(getattr(EmoteController, "is_plugin_enabled", None)))
         self.assertTrue(callable(getattr(EmoteController, "reload_plugins", None)))
 
+    def test_controller_emits_structured_success_after_introspection(self):
+        from emote_widget.core.controller import EmoteController
+
+        class Adapter:
+            def register_python_bridge(self, bridge, name):
+                pass
+
+            def run_javascript(self, script):
+                pass
+
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            controller = EmoteController(Adapter(), plugin_dir=plugin_dir)
+            controller._requested_model_filename = "character.psb"
+            controller._active_load_id = "load-1"
+            controller._active_health_report = {"accepted": True}
+            controller.get_variables = lambda callback: callback([])
+            emitted = []
+            controller.model_load_succeeded.connect(
+                lambda path, report: emitted.append((path, report))
+            )
+
+            controller._perform_introspection(["idle"])
+
+            self.assertEqual(
+                emitted,
+                [("character.psb", {"accepted": True})],
+            )
+
+    def test_rejected_model_keeps_previous_ready_model(self):
+        from emote_widget.core import controller as controller_module
+        from emote_widget.core.controller import EmoteController
+
+        class Adapter:
+            def register_python_bridge(self, bridge, name):
+                pass
+
+            def run_javascript(self, script):
+                pass
+
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            controller = EmoteController(Adapter(), plugin_dir=plugin_dir)
+            controller.current_model_filename = "working.psb"
+            controller._player_is_ready = True
+            controller._model_state = "ready"
+            controller.variable_map = {"old": {"name": "old"}}
+            controller._active_load_id = "old-load"
+
+            original_resolve = controller_module.resolve_resource_url
+            controller_module.resolve_resource_url = lambda *_args: (_ for _ in ()).throw(
+                controller_module.ResourceNormalizationError("bad PSB")
+            )
+            try:
+                controller.load_model("broken.psb")
+            finally:
+                controller_module.resolve_resource_url = original_resolve
+
+            self.assertTrue(controller._player_is_ready)
+            self.assertEqual(controller._model_state, "ready")
+            self.assertEqual(controller.current_model_filename, "working.psb")
+            self.assertEqual(controller.variable_map, {"old": {"name": "old"}})
+
+    def test_runtime_failure_restores_previous_ready_state(self):
+        from emote_widget.core.controller import EmoteController
+
+        class Adapter:
+            def register_python_bridge(self, bridge, name):
+                pass
+
+            def run_javascript(self, script):
+                pass
+
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            controller = EmoteController(Adapter(), plugin_dir=plugin_dir)
+            controller.current_model_filename = "working.psb"
+            controller._player_is_ready = True
+            controller._model_state = "ready"
+            controller.variable_map = {"old": {"name": "old"}}
+            controller._active_health_report = {"accepted": True}
+            controller._active_load_id = "new-load"
+            controller._previous_model_snapshot = {
+                "filename": "working.psb",
+                "player_ready": True,
+                "state": "ready",
+                "variable_map": controller.variable_map,
+                "mouth_param_info": None,
+                "health_report": {"accepted": True},
+            }
+
+            controller._fail_model_load(
+                "broken.psb", "MODEL_RUNTIME_LOAD_FAILED", "bad runtime", False
+            )
+
+            self.assertTrue(controller._player_is_ready)
+            self.assertEqual(controller._model_state, "ready")
+            self.assertEqual(controller.current_model_filename, "working.psb")
+            self.assertEqual(controller.variable_map, {"old": {"name": "old"}})
+
+    def test_runtime_failure_does_not_discard_previous_js_player(self):
+        renderer_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "js" / "core_renderer.js"
+        source = renderer_path.read_text(encoding="utf-8")
+
+        self.assertIn("if (!fatal) {", source)
+        self.assertIn("window.modelLoadState = 'ready';", source)
+        self.assertNotIn("window.emotePlayer = null;\n        if (window.py_api", source)
+
+    def test_next_model_can_start_after_validation_failure(self):
+        from emote_widget.core import controller as controller_module
+        from emote_widget.core.controller import EmoteController
+
+        class Adapter:
+            def __init__(self):
+                self.scripts = []
+
+            def register_python_bridge(self, bridge, name):
+                pass
+
+            def run_javascript(self, script):
+                self.scripts.append(script)
+
+        adapter = Adapter()
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            controller = EmoteController(adapter, plugin_dir=plugin_dir)
+            controller.current_model_filename = "working.psb"
+            controller._player_is_ready = True
+            controller._model_state = "ready"
+
+            original_resolve = controller_module.resolve_resource_url
+            calls = iter([controller_module.ResourceNormalizationError("bad PSB"), "emote:///good.psb"])
+
+            def resolve(*_args):
+                result = next(calls)
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+            controller_module.resolve_resource_url = resolve
+            try:
+                controller.load_model("broken.psb")
+                controller.load_model("good.psb")
+            finally:
+                controller_module.resolve_resource_url = original_resolve
+
+            self.assertEqual(controller._model_state, "loading")
+            self.assertTrue(any("loadNewModel" in script for script in adapter.scripts))
+
+    def test_renderer_load_uses_candidate_player_before_commit(self):
+        renderer_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "js" / "core_renderer.js"
+        source = renderer_path.read_text(encoding="utf-8")
+
+        self.assertIn("const previousPlayer = window.emotePlayer;", source)
+        self.assertIn("let candidatePlayer = null;", source)
+        self.assertIn("window.emotePlayer = candidatePlayer;", source)
+        self.assertIn("window.emotePlayer = previousPlayer;", source)
+
+    def test_renderer_releases_candidate_and_previous_player(self):
+        renderer_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "js" / "core_renderer.js"
+        source = renderer_path.read_text(encoding="utf-8")
+
+        self.assertIn("candidatePlayer.destroy();", source)
+        self.assertIn("previousPlayer.destroy();", source)
+
+    def test_renderer_marks_player_commit_before_callback_can_fail(self):
+        """桥接回调异常时，不能把已经提交的新 player 当成旧事务回滚。"""
+        renderer_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "js" / "core_renderer.js"
+        source = renderer_path.read_text(encoding="utf-8")
+
+        self.assertIn("let playerCommitted = false;", source)
+        self.assertIn("playerCommitted = true;", source)
+        self.assertIn("if (playerCommitted) {", source)
+
+    def test_emote_player_destroy_is_idempotent_and_release_uses_class_counter(self):
+        renderer_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "driver" / "emoteplayer.js"
+        source = renderer_path.read_text(encoding="utf-8")
+
+        self.assertIn("if (this._destroyed) return;", source)
+        self.assertIn("EmotePlayer.deviceRefCount", source)
+        self.assertNotIn("sEmotePlayer.deviceRefCount", source)
+
+    def test_emote_device_has_a_native_finish_lifecycle_method(self):
+        renderer_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "driver" / "emoteplayer.js"
+        source = renderer_path.read_text(encoding="utf-8")
+
+        self.assertIn("destroy() {", source.split("class EmotePlayer", 1)[0])
+        self.assertIn("EmoteDevice_Finish();", source)
+
+    def test_webview_config_allows_memory_growth_for_large_models(self):
+        html_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "pyside_webview.html"
+        source = html_path.read_text(encoding="utf-8")
+
+        self.assertIn("ALLOW_MEMORY_GROWTH: 1", source)
+
+    def test_dialog_validation_waits_until_a_theme_has_loaded(self):
+        dialog_path = Path(__file__).resolve().parents[1] / "emote_widget" / "web_frontend" / "js" / "dialog_system.js"
+        source = dialog_path.read_text(encoding="utf-8")
+        ensure_body = source.split("function ensureDialogElements() {", 1)[1].split(
+            "// ==========================================================", 1
+        )[0]
+
+        loading_guard = ensure_body.index("if (!window.currentLoadedTheme) return false;")
+        critical_log = ensure_body.index("Dialog theme structure invalid")
+        self.assertLess(loading_guard, critical_log)
+
     def test_corrupt_plugin_state_fails_open_without_disabling_plugins(self):
         from emote_widget.core.plugin_system import PluginStateStore
 
@@ -199,12 +433,12 @@ class PluginSystemV2Tests(unittest.TestCase):
         class Plugins:
             cleanup_called = False
 
-            def cleanup_all(self, clear=False):
+            def cleanup_all(self, clear: bool = False):
                 self.cleanup_called = True
 
         controller = EmoteController.__new__(EmoteController)
-        controller._plugin_loader_thread = RunningThread()
-        controller.plugins = Plugins()
+        controller._plugin_loader_thread = RunningThread()  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
+        controller.plugins = Plugins()  # pyright: ignore[reportAttributeAccessIssue]
 
         self.assertFalse(controller.reload_plugins())
         self.assertFalse(controller.plugins.cleanup_called)
@@ -228,6 +462,17 @@ class PluginSystemV2Tests(unittest.TestCase):
                     {"module": "enabled", "enabled": True},
                 ],
             )
+
+    def test_builtin_plugins_expose_example_without_legacy_debug_module(self):
+        from emote_widget.core.plugin_system import PluginLoaderWorker
+
+        plugin_dir = str(Path(__file__).resolve().parents[1] / "plugins")
+        modules = {
+            item["module"] for item in PluginLoaderWorker(plugin_dir).list_plugin_modules()
+        }
+
+        self.assertIn("example", modules)
+        self.assertNotIn("debug", modules)
 
     def test_qt_tester_plugin_tab_exposes_enable_and_reload_controls(self):
         tester_path = os.path.join(

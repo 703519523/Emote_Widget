@@ -4,11 +4,13 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Callable
 from unittest.mock import patch
 
 from emote_widget.utils.psb_converter import PsbReader
 from emote_widget.core.middleware import MiddlewareManager
 from emote_widget.core.middleware import Middleware
+from emote_widget.utils.paths import clear_resource_url_cache
 
 
 class ModelNormalizerTests(unittest.TestCase):
@@ -24,7 +26,7 @@ class ModelNormalizerTests(unittest.TestCase):
             self.skipTest("local wrapped Win PSB fixture is not available")
         return self.WRAPPED_WIN_FIXTURE
 
-    def _require_named_fixture(self, name_fragment):
+    def _require_named_fixture(self, name_fragment: str) -> Path:
         root = Path("test_models")
         fixture = next(
             (path for path in root.glob("*") if name_fragment in path.name),
@@ -64,7 +66,11 @@ class ModelNormalizerTests(unittest.TestCase):
 
             MiddlewareManager.clear_all()
             class TestExtensionMiddleware(Middleware):
-                def process(self, data, next):
+                def process(
+                    self,
+                    data: dict[str, Any],
+                    next: Callable[[dict[str, Any]], Any],
+                ) -> Any:
                     data["normalized_data"] = normalized
                     data["shell"] = "test-extension"
                     return next(data)
@@ -74,7 +80,12 @@ class ModelNormalizerTests(unittest.TestCase):
             with patch("emote_widget.utils.model_normalizer.PsbNormalizer") as normalizer_cls:
                 normalize_result = normalizer_cls.return_value.normalize_data.return_value
                 normalize_result.data = normalized
-                result = normalize_model_path(source, cache_root=Path(directory) / "cache")
+                from emote_widget.utils.model_health import ModelHealthReport
+                with patch(
+                    "emote_widget.utils.model_normalizer.inspect_model_bytes",
+                    return_value=ModelHealthReport(True, (), {}),
+                ):
+                    result = normalize_model_path(source, cache_root=Path(directory) / "cache")
 
             self.assertNotEqual(result, source)
             self.assertEqual(result.read_bytes(), normalized)
@@ -85,13 +96,18 @@ class ModelNormalizerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "character.psb"
-            source.write_bytes(b"PSB\0already pure")
+            # Create a minimal valid PSB to pass health checks
+            source.write_bytes(b"PSB\0" + b"\x00" * 32)  # Minimal header
 
             with patch("emote_widget.utils.model_normalizer.PsbNormalizer") as normalizer_cls:
-                result = normalize_model_path(source, cache_root=Path(directory) / "cache")
+                with patch("emote_widget.utils.model_normalizer.inspect_model_bytes") as health_check:
+                    from emote_widget.utils.model_health import ModelHealthReport
+                    health_check.return_value = ModelHealthReport(True, (), {})
+                    result = normalize_model_path(source, cache_root=Path(directory) / "cache")
 
             self.assertEqual(result, source)
             normalizer_cls.assert_not_called()
+            health_check.assert_called_once()
 
     def test_core_normalizer_rejects_wrapped_input(self):
         from emote_widget.utils.psb_converter import PsbNormalizer, PsbNormalizerError
@@ -123,7 +139,7 @@ class ModelNormalizerTests(unittest.TestCase):
 
     def test_psb_plugin_native_psp_unpack_matches_python_fallback(self):
         from plugins.psb_decryption import _native
-        from plugins.psb_decryption.psb_shell import _unpack_psp_python
+        from plugins.psb_decryption.psb_shell import _unpack_psp_python  # pyright: ignore[reportPrivateUsage]
 
         payload = b"PSB\0test"
         shell = struct.pack("<I", len(payload)) + b"\xff" + payload
@@ -171,6 +187,36 @@ class ModelNormalizerTests(unittest.TestCase):
 
             self.assertIn("cannot adapt spec='krkr' to EMS", str(raised.exception))
 
+    def test_repeated_model_url_resolution_preserves_health_report(self):
+        from emote_widget.utils.model_health import ModelHealthReport
+        from emote_widget.utils.paths import (
+            consume_last_model_health_report,
+            register_allowed_path,
+            resolve_resource_url,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "character.psb"
+            source.write_bytes(b"PSB\0test-double")
+            report = ModelHealthReport(True, (), {"spec": "ems"})
+            register_allowed_path(directory)
+            clear_resource_url_cache()
+
+            with patch(
+                "emote_widget.utils.paths.normalize_model_path",
+                return_value=source.resolve(),
+            ), patch(
+                "emote_widget.utils.paths.get_model_health_report",
+                return_value=report,
+            ):
+                resolve_resource_url(str(source), "models")
+                first = consume_last_model_health_report()
+                resolve_resource_url(str(source), "models")
+                second = consume_last_model_health_report()
+
+            self.assertIs(first, report)
+            self.assertIs(second, report)
+
     def test_real_lz4_win_rgba8_model_is_adapted_for_ems_driver(self):
         source = self._require_wrapped_win_fixture()
 
@@ -198,7 +244,7 @@ class ModelNormalizerTests(unittest.TestCase):
         self.assertEqual(converted[after_start + 3], raw[before_start + 3])
 
     def test_win_bgra_conversion_returns_immutable_ems_rgba_bytes(self):
-        from plugins.psb_decryption.ems_adapter import _bgr_to_rgb
+        from plugins.psb_decryption.ems_adapter import _bgr_to_rgb  # pyright: ignore[reportPrivateUsage]
 
         source = bytearray(b"\x10\x20\x30\x40\xaa\xbb\xcc\xdd")
 
@@ -250,7 +296,7 @@ class ModelNormalizerTests(unittest.TestCase):
         from plugins.psb_decryption.psb_compiler import PsbCompiler
         from plugins.psb_decryption.psb_reader import PsbReader
 
-        root = {
+        root: dict[str, Any] = {
             "spec": "ems",
             "label": "compiler-roundtrip",
             "regular": {

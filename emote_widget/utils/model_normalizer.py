@@ -9,9 +9,15 @@ from typing import Union
 
 from emote_widget.core.middleware import MiddlewareManager
 from .psb_converter import PsbNormalizer
+from .model_health import ModelHealthReport, inspect_model_bytes
 
 
 StrPath = Union[str, os.PathLike[str]]
+_HEALTH_REPORTS: dict[Path, ModelHealthReport] = {}
+
+
+def get_model_health_report(path: StrPath) -> ModelHealthReport | None:
+    return _HEALTH_REPORTS.get(Path(path).resolve())
 
 
 def _normalize_model_path_default(context: dict) -> dict:
@@ -29,6 +35,9 @@ def _normalize_model_path_default(context: dict) -> dict:
         normalized_data = result.data
         context["summary"] = result.summary
     elif source.read_bytes().startswith(b"PSB\0"):
+        report = inspect_model_bytes(source.read_bytes())
+        _HEALTH_REPORTS[source] = report
+        context["health_report"] = report
         context["normalized_path"] = source
         return context
     else:
@@ -45,6 +54,11 @@ def _normalize_model_path_default(context: dict) -> dict:
         temporary = target.with_suffix(target.suffix + ".tmp")
         temporary.write_bytes(normalized_data)
         os.replace(temporary, target)
+
+    report = inspect_model_bytes(normalized_data)
+    _HEALTH_REPORTS[source] = report
+    _HEALTH_REPORTS[target] = report
+    context["health_report"] = report
 
     context["normalized_path"] = target
     return context
@@ -66,6 +80,7 @@ def normalize_model_path(path: StrPath, *, cache_root: StrPath = ".emote_cache/n
         "normalized_data": None,
         "shell": None,
         "crypto_summary": None,
+        "health_report": None,
     }
     chain = MiddlewareManager.get_chain("psb.normalize")
     result = chain.execute(context, terminal=_normalize_model_path_default)

@@ -123,7 +123,7 @@ class PluginAccessor:
         """
         [黑魔法] 动态属性访问。
         
-        允许 `plugins.debug` 访问名为 "debug" 的插件。
+        允许 `plugins.example` 访问名为 "example" 的插件。
         如果插件不存在，抛出 AttributeError。
         """
         plugin = self.get(name)

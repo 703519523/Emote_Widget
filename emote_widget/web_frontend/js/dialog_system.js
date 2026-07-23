@@ -159,6 +159,9 @@ function ensureDialogElements() {
         return false;
     }
 
+    // 默认主题通过 XHR 异步预加载；加载完成前挂载点为空是正常状态，不应误报结构损坏。
+    if (!window.currentLoadedTheme) return false;
+
     // 缓存 DOM 引用
     window.dialogContainer = dialogRoot.querySelector(".dialog-container");
     window.dialogText = dialogRoot.querySelector("#dialog-text");

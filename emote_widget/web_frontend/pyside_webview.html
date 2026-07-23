@@ -14,7 +14,10 @@
     <!-- Emote Player 内存配置 -->
     <script>
         // 分配 256MB 内存给 Emote 引擎，防止大型模型崩溃
-        var Module = { TOTAL_MEMORY: 256 * 1024 * 1024 }; 
+        var Module = {
+            TOTAL_MEMORY: 256 * 1024 * 1024,
+            ALLOW_MEMORY_GROWTH: 1
+        };
     </script>
     
     <!-- 启动画面 (Splash Screen) -->

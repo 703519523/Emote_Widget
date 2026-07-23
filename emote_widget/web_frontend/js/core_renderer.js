@@ -38,6 +38,16 @@ window.isMirrored = false;
 
 // Internal state
 let resizeTimeout = null;
+window.modelLoadState = 'idle';
+window.emoteRuntimeFatal = false;
+
+window.requireReadyPlayer = function(operationName) {
+    if (window.modelLoadState !== 'ready' || !window.emotePlayer || window.emoteRuntimeFatal) {
+        console.debug(`[Render] Ignored ${operationName}: player is not ready.`);
+        return false;
+    }
+    return true;
+};
 
 // ==========================================================
 // ==  Public API (Called by Python)
@@ -80,20 +90,21 @@ window.setRenderQuality = function(mode) {
  * 加载新模型。
  * @param {string} modelUrl - 模型的 emote:// URL
  */
-window.loadNewModel = async function(modelUrl) {
+window.loadNewModel = async function(modelUrl, loadId) {
     console.log(`JS: Received command, loading model URL: '${modelUrl}'`);
+    const previousPlayer = window.emotePlayer;
+    let candidatePlayer = null;
+    // 提交后，后续桥接通知即使抛错也不能把已提交的实例回滚并销毁。
+    let playerCommitted = false;
+    window.modelLoadState = 'loading';
     try {
+        if (window.emoteRuntimeFatal) {
+            throw new Error('Emote WASM runtime is in a fatal state and must be reloaded.');
+        }
         const canvas = document.getElementById('emote-canvas');
         
-        // Remove old listeners to prevent memory leaks
-        if (window.emotePlayer) {
-            if (typeof window.debouncedUpdateDialogPosition === 'function') {
-                window.emotePlayer.off('transformchange', window.debouncedUpdateDialogPosition);
-            }
-        }
-
-        // Lazy Initialization: Create player only on first load
-        if (!window.emotePlayer) {
+        // 每次加载使用候选实例。旧实例保持 active，直到候选模型完整成功。
+        if (!previousPlayer) {
             console.log(`JS: First load, creating EmotePlayer instance...`);
             
             // Initial resolution setup
@@ -112,40 +123,77 @@ window.loadNewModel = async function(modelUrl) {
             
             // Initialize EmotePlayer runtime
             EmotePlayer.createRenderCanvas(w, h);
-            window.emotePlayer = new EmotePlayer(canvas);
+            candidatePlayer = new EmotePlayer(canvas);
+        } else {
+            candidatePlayer = new EmotePlayer(canvas);
         }
 
         // Load data asynchronously
-        await window.emotePlayer.promiseLoadDataFromURL(modelUrl);
+        await candidatePlayer.promiseLoadDataFromURL(modelUrl);
 
         // Re-attach listeners (e.g., sync dialog position when model moves)
         if (typeof window.debouncedUpdateDialogPosition === 'function') {
-            window.emotePlayer.on('transformchange', window.debouncedUpdateDialogPosition);
+            candidatePlayer.on('transformchange', window.debouncedUpdateDialogPosition);
         }
         
         console.log("JS: Model data loaded successfully!");
         
         // Get available animations
-        const timelines = window.emotePlayer.mainTimelineLabels || [];
+        const timelines = candidatePlayer.mainTimelineLabels || [];
 
         // Ensure Bridge is ready before calling Python
         if (!window.py_api && window.bridgeReadyPromise) {
             await window.bridgeReadyPromise; 
         }
 
-        // Notify Python: Player Ready
-        if (window.py_api && typeof window.py_api.on_player_ready === 'function') {
+        window.emotePlayer = candidatePlayer;
+        window.modelLoadState = 'ready';
+        playerCommitted = true;
+        // 提交候选实例后再释放旧实例，避免切换期间短暂没有可用 player。
+        if (previousPlayer && previousPlayer !== candidatePlayer) {
+            previousPlayer.destroy();
+        }
+        if (window.py_api && typeof window.py_api.on_model_load_succeeded === 'function') {
+            window.py_api.on_model_load_succeeded(loadId, JSON.stringify({ timelines }));
+        } else if (window.py_api && typeof window.py_api.on_player_ready === 'function') {
             window.py_api.on_player_ready(timelines);
         }
         
     } catch (err) {
-        if (typeof window.handleJsError === 'function') {
-            window.handleJsError(err, `loadNewModel('${modelUrl}')`);
+        const message = (err && err.message) ? err.message : String(err || 'Unknown model load error');
+        const stack = (err && err.stack) ? err.stack : '';
+        const fatal = /abort(?:\(\d*\))?|fatal state|EmotePlayer_Initialize/i.test(message + '\n' + stack);
+        const code = fatal ? 'WASM_ABORT' : 'MODEL_RUNTIME_LOAD_FAILED';
+        if (playerCommitted) {
+            // 模型已经成功提交；这里只报告桥接层异常，绝不销毁 active player。
+            window.modelLoadState = 'ready';
+            window.emoteRuntimeFatal = false;
+        } else if (!fatal) {
+            // 非致命模型错误不应摧毁当前可用的 player。
+            // Controller 会恢复旧模型的 Python 状态；这里保持实例和 ready 状态，
+            // 这样后续正常模型仍可继续加载。
+            window.modelLoadState = 'ready';
+            window.emoteRuntimeFatal = false;
+            window.emotePlayer = previousPlayer;
+            if (candidatePlayer && candidatePlayer !== previousPlayer) {
+                candidatePlayer.destroy();
+            }
         } else {
-            console.error(err);
+            window.modelLoadState = 'fatal';
+            window.emoteRuntimeFatal = true;
+            if (previousPlayer) {
+                previousPlayer.destroy();
+            }
+            if (candidatePlayer && candidatePlayer !== previousPlayer) {
+                candidatePlayer.destroy();
+            }
+            window.emotePlayer = null;
         }
-        // If critical error, reset player instance
-        window.emotePlayer = null;
+        if (window.py_api && typeof window.py_api.on_model_load_failed === 'function') {
+            window.py_api.on_model_load_failed(loadId, code, message, stack, fatal);
+        } else if (typeof window.handleJsError === 'function') {
+            window.handleJsError(err, `loadNewModel('${modelUrl}')`);
+        }
     }
 }
 
@@ -231,7 +279,7 @@ window.addEventListener('resize', () => {
             console.log(`[Render] Resizing canvas to: ${w}x${h} (Scale: ${window.currentScaleFactor})`);
             canvas.width = w;
             canvas.height = h;
-            if (typeof EmotePlayer !== 'undefined' && typeof EmotePlayer.createRenderCanvas === 'function') {
+            if (!window.emoteRuntimeFatal && typeof EmotePlayer !== 'undefined' && typeof EmotePlayer.createRenderCanvas === 'function') {
                     EmotePlayer.createRenderCanvas(w, h);
             }
         }

@@ -1020,10 +1020,10 @@ class TestMainWindow(QMainWindow):
         """当所有插件都加载完成后，这个槽会被调用。"""
         print("\n主窗口: 收到插件加载完成信号！")
         try:
-            plugin=self.emote_view.api.plugins.get("debug")
+            plugin=self.emote_view.api.plugins.get("example")
             plugin.print_widget_size()
         except AttributeError:
-            print("主窗口: 未找到 'debug' 插件。")
+            print("主窗口: 未找到 'example' 插件。")
 
     @Slot(list)
     def _on_player_ready(self, timelines):
