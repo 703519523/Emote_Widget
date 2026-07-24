@@ -15,6 +15,7 @@ from typing import Any, Iterator
 
 from .psb_reader import PsbBadFormatError, PsbReader, PsbResourceRef
 from .rle_compress import decompress as rle_decompress, RleCompressError
+from .dxt_decoder import decompress_dxt5, DxtDecoderError
 
 
 def _iter_texture_descriptors(value: Any) -> Iterator[dict[str, Any]]:
@@ -68,10 +69,10 @@ def adapt_win_psb_to_ems(data: bytes) -> bytes:
         tex_type = texture.get("type")
         compress = texture.get("compress")
 
-        # Validate format
-        if tex_type is not None and tex_type != "RGBA8":
+        # Validate format - now support DXT5 in addition to RGBA8
+        if tex_type is not None and tex_type not in ("RGBA8", "DXT5"):
             raise PsbBadFormatError(
-                f"unsupported texture type {tex_type!r}; only RGBA8 is safe"
+                f"unsupported texture type {tex_type!r}; only RGBA8 and DXT5 are supported"
             )
 
         if compress is not None and compress != "RL":
@@ -87,8 +88,8 @@ def adapt_win_psb_to_ems(data: bytes) -> bytes:
 
         res_index = resource["index"]
 
-        # Mark for conversion if RL-compressed or RGBA8
-        if compress == "RL" or tex_type == "RGBA8":
+        # Mark for conversion if RL-compressed, RGBA8, or DXT5
+        if compress == "RL" or tex_type in ("RGBA8", "DXT5"):
             if res_index not in resources_to_convert:
                 resources_to_convert[res_index] = texture
 
@@ -109,12 +110,32 @@ def adapt_win_psb_to_ems(data: bytes) -> bytes:
         root["spec"] = "ems"
         regular = _extract_resource_bytes(data, header, parsed["resources"], False)
         extra = _extract_resource_bytes(data, header, parsed["extra_resources"], True)
-        # Win RGBA8 is little-endian ARGB as consumed by System.Drawing
-        # (memory bytes BGRA). EMS expects byte-order RGBA. This is the same
-        # R/B conversion performed by C# ConvertToImage +
-        # GetPixelBytesFromImage when switching the platform.
-        for resource_index in resources_to_convert:
-            regular[resource_index] = _bgr_to_rgb(regular[resource_index])
+
+        # Process resources that need conversion
+        for resource_index, texture_info in resources_to_convert.items():
+            tex_type = texture_info.get("type")
+            width = texture_info.get("width")
+            height = texture_info.get("height")
+
+            if tex_type == "DXT5":
+                # DXT5 decompression to RGBA8
+                if not width or not height:
+                    raise PsbBadFormatError(f"DXT5 texture #{resource_index} missing width/height")
+                try:
+                    rgba_data = decompress_dxt5(regular[resource_index], width, height)
+                    regular[resource_index] = rgba_data
+                except DxtDecoderError as e:
+                    raise PsbBadFormatError(f"DXT5 decode failed for resource #{resource_index}: {e}") from e
+            elif tex_type == "RGBA8":
+                # Win RGBA8 is little-endian ARGB as consumed by System.Drawing
+                # (memory bytes BGRA). EMS expects byte-order RGBA. This is the same
+                # R/B conversion performed by C# ConvertToImage +
+                # GetPixelBytesFromImage when switching the platform.
+                regular[resource_index] = _bgr_to_rgb(regular[resource_index])
+
+        # Update texture metadata in the tree to remove DXT5 markers
+        _update_texture_metadata_for_ems(root)
+
         prepared_root = _prepare_root_for_compiler(root, regular, extra)
         return PsbCompiler(version=header["version"]).compile(prepared_root)
 

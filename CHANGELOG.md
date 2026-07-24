@@ -2,6 +2,13 @@
 
 ## 2026-07-24 — Plugin System v2 与模型加载稳健性
 
+### 后续更新：freemote-py 插件化
+
+- 将 `freemote-py` 的 PSB builder/compiler/reader、shell、crypto、RLE、DXT 和 EMS 转换核心合并到 `plugins/psb_decryption`。
+- 将 `function_parity_matrix.md` 随插件维护，明确已验证、部分验证及缺失能力；不再把渲染后端当作 PSB 插件运行时依赖。
+- 保留插件现有 Rust/PyO3 PSP 解包 ABI，并为未来的 PSB 对象打包、字符串表 native 能力增加可选 facade；旧扩展仍可正常回退。
+- 明确排除 `backends/`、Windows DLL/PYD、`__pycache__` 和独立开发用 Rust 目录，避免把 dev 产物打入插件。
+
 ### 新增
 
 - 新增模型健康检查与结构化加载成功、失败、警告信号。

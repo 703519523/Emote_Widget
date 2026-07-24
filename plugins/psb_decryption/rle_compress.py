@@ -32,7 +32,10 @@ def decompress(data: bytes, align: int = 4, actual_size: Optional[int] = None) -
         RleCompressError: If decompression fails
     """
     input_stream = BytesIO(data)
-    output = BytesIO() if actual_size is None else BytesIO(bytearray(actual_size))
+    # C# ``new MemoryStream(actualSize)`` reserves capacity but does not add
+    # bytes to the logical stream length.  BytesIO(bytearray(actual_size))
+    # would incorrectly make those zeroes part of the returned payload.
+    output = BytesIO()
 
     total_bytes = 0
     input_len = len(data)

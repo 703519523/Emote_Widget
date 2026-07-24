@@ -9,9 +9,11 @@ PSB Compiler - 完整的 PSB 文件编译器
 """
 
 import io
+import math
 import struct
 from typing import Dict, List, Any, Tuple, Set
 from .psb_types import PsbType, PsbDouble, get_size, zip_number_bytes, write_psb_array, calculate_adler32
+from . import _native
 
 
 class PsbCompiler:
@@ -28,7 +30,7 @@ class PsbCompiler:
         self.optimize = True
 
     def compile(self, obj: Any, merge_strings: bool = True, merge_resources: bool = False,
-                optimize: bool = True) -> bytes:
+                optimize: bool = True, align: bool = True) -> bytes:
         """
         编译对象树为 PSB 二进制数据
 
@@ -40,12 +42,68 @@ class PsbCompiler:
         Returns:
             PSB 二进制数据
         """
+        # Match PsbJsonConverter.ConvertToken before collecting PSB tables.
+        obj = self._convert_json_values(obj)
+
         # 1. 收集所有 Names、Strings、Resources
         self._collect(obj, merge_strings, merge_resources)
 
         # 2. 构建 PSB
         self.optimize = optimize
+        self.align = align
         return self._build(obj)
+
+    @classmethod
+    def _convert_json_values(cls, value: Any, *, _depth: int = 0) -> Any:
+        """Apply FreeMote's JSON-to-PSB scalar conversion rules.
+
+        In particular, resource identifiers and ``#0x`` bit-pattern numbers
+        are syntax, not ordinary strings, and JSON decimals are stored as a
+        Float only when their float32 round-trip is within 1E-08.
+        """
+        # Newtonsoft.Json's PsbJsonConverter sets JsonReader.MaxDepth = 256.
+        # Keep the same boundary here rather than letting Python recurse until
+        # its process-wide recursion limit (which also varies by embedding).
+        if _depth > 256:
+            raise ValueError("JSON maximum depth exceeded (256)")
+
+        if isinstance(value, str):
+            if value.startswith("#0x"):
+                payload = value[3:]
+                if value.endswith("f"):
+                    bits = int(payload[:8], 16)
+                    return struct.unpack("<f", struct.pack("<I", bits))[0]
+                if value.endswith("d"):
+                    bits = int(payload[:16], 16)
+                    return PsbDouble(struct.unpack("<d", struct.pack("<Q", bits))[0])
+                return int(payload, 16)
+            if value.startswith("#resource@"):
+                return {"_type": "resource", "index": int(value.replace("#resource@", "")), "is_extra": True}
+            if value.startswith("#resource#"):
+                return {"_type": "resource", "index": int(value.replace("#resource#", "")), "is_extra": False}
+            return value
+        if isinstance(value, float) and not isinstance(value, PsbDouble):
+            if value == 0.0:
+                return value
+            try:
+                float32 = struct.unpack("<f", struct.pack("<f", value))[0]
+            except OverflowError:
+                float32 = math.copysign(math.inf, value)
+            return float32 if abs(float32 - value) < 1e-8 else PsbDouble(value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            # Json.NET materializes JSON integers as Int64 before the PSB
+            # converter sees them. Values outside that range fail conversion.
+            if value < -(1 << 63) or value > (1 << 63) - 1:
+                raise OverflowError("JSON integer is outside Int64 range")
+            return value
+        if isinstance(value, list):
+            return [cls._convert_json_values(item, _depth=_depth + 1) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: cls._convert_json_values(item, _depth=_depth + 1)
+                for key, item in value.items()
+            }
+        return value
 
     def _collect(self, obj: Any, merge_strings: bool, merge_resources: bool):
         """收集所有需要的 Names、Strings、Resources"""
@@ -129,6 +187,11 @@ class PsbCompiler:
                                 target.extend([b''] * (idx - len(target) + 1))
                             target[idx] = data
                             return ('resource', idx)
+                    if idx >= len(target):
+                        # PsbResource references participate in Collect even
+                        # when no linked payload exists yet. C# therefore
+                        # emits offset/length entries containing zero.
+                        target.extend([b''] * (idx - len(target) + 1))
                     return ('resource', idx)
 
                 for key, value in o.items():
@@ -196,7 +259,14 @@ class PsbCompiler:
 
         # 2. 编译 Entries 区块（对象树）
         offset_entries = output.tell()
-        self._pack(output, obj)
+        native_entries = _native.pack_psb_object(
+            obj, self.version, getattr(self, 'optimize', True),
+            self.name_to_index, self.string_to_index,
+        )
+        if native_entries is not None:
+            output.write(native_entries)
+        else:
+            self._pack(output, obj)
         print(f"[Build] Entries: {offset_entries} -> {output.tell()} ({output.tell() - offset_entries} bytes)")
 
         # 3. 编译 Strings 区块
@@ -295,6 +365,11 @@ class PsbCompiler:
             node = root
             for byte in value.encode("utf-8") + b"\x00":
                 node = node.children.setdefault(byte, Node(byte, node))
+
+        if not names:
+            # Both PrefixTree allocators serialize an empty tree as an empty
+            # PSB array while retaining the root offset array ``[1]``.
+            return [], [], [1]
 
         tree: List[int] = [0]
         offsets: List[int] = [1]
@@ -411,6 +486,21 @@ class PsbCompiler:
         offsets = []
         strings_data = io.BytesIO()
 
+        # Rust mirrors the C# suffix-sharing order.  Keep the Python path as
+        # a fallback for surrogate-containing strings or unavailable builds.
+        try:
+            native_table = _native.build_string_table(
+                self.strings, getattr(self, 'optimize', False)
+            )
+        except (AttributeError, TypeError, ValueError):
+            native_table = None
+        if native_table is not None:
+            offsets, native_data = native_table
+            output.write(write_psb_array(offsets))
+            offset_strings_data = output.tell()
+            output.write(native_data)
+            return offset_strings_data
+
         if getattr(self, 'optimize', False):
             # C# orders by descending character count and stores every string
             # as a suffix of an already written longer string when possible.
@@ -454,15 +544,14 @@ class PsbCompiler:
         Returns:
             (offset_chunk_offsets, offset_chunk_lengths, offset_chunk_data)
         """
-        # 收集资源的偏移和长度
         offsets = []
         lengths = []
         resources_data = io.BytesIO()
-
         for res in resources:
             offsets.append(resources_data.tell())
             lengths.append(len(res))
             resources_data.write(res)
+        resources_blob = resources_data.getvalue()
 
         # 写入 offsets array
         offset_chunk_offsets = output.tell()
@@ -475,13 +564,14 @@ class PsbCompiler:
         # FreeMote's optimized compiler enables PsbDataStructureAlign and
         # aligns the beginning of each resource-data block to 16 bytes.  This
         # applies to the empty v4 extra-resource block as well.
-        padding = (-output.tell()) % 16
-        if padding:
-            output.write(b'\x00' * padding)
+        if getattr(self, 'align', True):
+            padding = (-output.tell()) % 16
+            if padding:
+                output.write(b'\x00' * padding)
 
         # 写入 resources data
         offset_chunk_data = output.tell()
-        output.write(resources_data.getvalue())
+        output.write(resources_blob)
 
         return offset_chunk_offsets, offset_chunk_lengths, offset_chunk_data
 

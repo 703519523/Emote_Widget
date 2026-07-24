@@ -137,6 +137,15 @@ class ModelNormalizerTests(unittest.TestCase):
         if _native.available("psp_lzss_unpack"):
             self.assertIsNone(_native.load_error())
 
+    def test_freemote_core_is_packaged_inside_decryption_plugin_without_render_backends(self):
+        plugin_root = Path(__file__).resolve().parents[1] / "plugins" / "psb_decryption"
+
+        self.assertTrue((plugin_root / "function_parity_matrix.md").is_file())
+        self.assertTrue((plugin_root / "psb_builder.py").is_file())
+        self.assertTrue((plugin_root / "psb_normalizer.py").is_file())
+        self.assertFalse((plugin_root / "backends").exists())
+        self.assertFalse((plugin_root / "rust").exists())
+
     def test_psb_plugin_native_psp_unpack_matches_python_fallback(self):
         from plugins.psb_decryption import _native
         from plugins.psb_decryption.psb_shell import _unpack_psp_python  # pyright: ignore[reportPrivateUsage]

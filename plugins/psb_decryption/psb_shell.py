@@ -19,12 +19,8 @@ class UnwrappedPsb:
     shell: str
 
 
-LZ4_FRAME_MAGIC = b"\x04\x22\x4D\x18"
-PSZ_MAGIC = b"PSZ\0"
-PSP_EMBEDDED_MAGIC_OFFSET = 5
-
-
 def _unpack_psp_python(data: bytes, unpacked_size: int) -> bytes:
+    """PSP LZSS Python fallback；用于 native parity 和无扩展环境。"""
     frame = bytearray(0x1000)
     frame_position = 1
     source_position = 4
@@ -62,25 +58,9 @@ def _unpack_psp_python(data: bytes, unpacked_size: int) -> bytes:
     return bytes(output)
 
 
-def _unpack_psp(data: bytes) -> bytes:
-    if len(data) < 5:
-        raise PsbShellError("truncated PSP shell")
-    unpacked_size = struct.unpack_from("<I", data)[0]
-    if unpacked_size < 4:
-        raise PsbShellError(f"invalid PSP decompressed size: {unpacked_size}")
-    try:
-        pure = _native_unpack_psp(data)
-    except ValueError as exc:
-        raise PsbShellError(str(exc)) from exc
-    if pure is None:
-        pure = _unpack_psp_python(data, unpacked_size)
-    if len(pure) != unpacked_size:
-        raise PsbShellError(
-            f"PSP decompressed size mismatch: expected {unpacked_size}, got {len(pure)}"
-        )
-    if not pure.startswith(b"PSB\0"):
-        raise PsbShellError("psp payload is not PSB\\0")
-    return pure
+LZ4_FRAME_MAGIC = b"\x04\x22\x4D\x18"
+PSZ_MAGIC = b"PSZ\0"
+PSP_EMBEDDED_MAGIC_OFFSET = 5
 
 
 def detect_shell(data: bytes) -> str:
@@ -135,7 +115,23 @@ def unwrap_psb(data: bytes) -> UnwrappedPsb:
         except RuntimeError as exc:
             raise PsbShellError(f"invalid LZ4 frame: {exc}") from exc
     elif shell == "psp":
-        pure = _unpack_psp(data)
+        if len(data) < 5:
+            raise PsbShellError("truncated PSP shell")
+        unpacked_size = struct.unpack_from("<I", data)[0]
+        if unpacked_size < 4:
+            raise PsbShellError(f"invalid PSP decompressed size: {unpacked_size}")
+        try:
+            pure = _native_unpack_psp(data)
+        except ValueError as exc:
+            raise PsbShellError(str(exc)) from exc
+        if pure is not None:
+            if not pure.startswith(b"PSB\0"):
+                raise PsbShellError("psp payload is not PSB\\0")
+            return UnwrappedPsb(pure, shell)
+        try:
+            pure = _unpack_psp_python(data, unpacked_size)
+        except PsbShellError:
+            raise
     elif shell == "mdf":
         if len(data) < 10:
             raise PsbShellError("truncated MDF shell")
