@@ -32,6 +32,9 @@ class PythonApiBridge(QObject):
     player_ready_signal = Signal(list)
     """当 JS 端模型加载就绪时发射。参数: timelines (list[str])"""
 
+    model_load_succeeded_signal = Signal(str, str)
+    model_load_failed_signal = Signal(str, str, str, str, bool)
+
     on_character_clicked_signal = Signal()
     """当 JS 端检测到点击事件时发射。"""
 
@@ -72,6 +75,16 @@ class PythonApiBridge(QObject):
         """
         logger.info(f"--> [Bridge] on_player_ready called. Timelines count: {len(timelines)}")
         self.player_ready_signal.emit(timelines)
+
+    @Slot(str, str)
+    def on_model_load_succeeded(self, load_id: str, payload_json: str) -> None:
+        self.model_load_succeeded_signal.emit(load_id, payload_json)
+
+    @Slot(str, str, str, str, bool)
+    def on_model_load_failed(
+        self, load_id: str, code: str, message: str, stack: str, fatal: bool
+    ) -> None:
+        self.model_load_failed_signal.emit(load_id, code, message, stack, fatal)
     
     @Slot(str, str) 
     def receive_query_result(self, request_id: str, result_json: str) -> None:

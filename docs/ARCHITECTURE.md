@@ -11,6 +11,10 @@ EmoteWidget 是一个基于 PySide6、Qt WebEngine 和 JavaScript 前端的动�
 1. **Qt Widgets**：`EmoteWidget`，适合传统 QWidget 应用。
 2. **Qt Quick/QML**：`EmoteWidgetQml`，适合 QML 应用，通过属性、信号和槽与 QML 交互。
 
+插件系统 v2 的详细设计、事件目录、中间件调用约定和实施计划见
+[`docs/PLUGIN_SYSTEM_V2.md`](PLUGIN_SYSTEM_V2.md)。本文只保留整体架构和真实调用链；
+插件扩展点的具体约定以该文档为准。
+
 项目的核心不是某一个窗口类，而是下面这条依赖链：
 
 ```text
@@ -157,11 +161,11 @@ _safe_query(expression, callback)
 - 支持 LZ4 Frame、MDF、PSZ (zlib) 压缩包装
 - 自动检测并解包，输出 raw PSB 字节流
 
-**2. XorShift128 解密** (`psb_crypto.py`)
-- 检测 PSB v2/v3/v4 header 的加密标志
-- **PSB v3/v4**: 支持自动密钥恢复（通过已知 header 长度反推 XorShift128 的 Key4）
-- **PSB v2**: 需要用户提供显式密钥
-- 解密后重新计算 Adler32 checksum 确保完整性
+**2. 可选解密插件** (`plugins/psb_decryption/`)
+- 核心 SDK 不直接实现加密解密
+- `psb_decryption` 插件通过 `psb.normalize` Middleware 接入
+- 插件负责 PSB v2/v3/v4 的 XorShift128 解密、密钥处理和 Adler32 校验
+- 未启用插件时，核心仍可处理 raw/未加密模型；加密模型由扩展层按需处理
 
 **3. 平台适配** (`ems_adapter.py`)
 - 检查 PSB 的 `spec` 字段（`win`/`ems`/`krkr` 等）
@@ -196,8 +200,8 @@ Controller 在 Player 就绪前缓存控制指令；Player 就绪后按调用顺
 `PluginLoaderWorker` 在 QThread 中扫描 `plugins/`，导入单文件插件或包含 `__init__.py` 的插件包，寻找 `IEmotePlugin` 子类并实例化。完成后 Controller 注册到 `PluginAccessor`。
 
 ```python
-controller.plugins.get("debug")
-controller.plugins.debug
+controller.plugins.get("example")
+controller.plugins.example
 ```
 
 QML 模式下，访问器会返回安全代理；插件公共方法还会被包装为 QML 可调用 Slot。插件清理由 Controller 的 `cleanup()` 统一协调。
@@ -236,3 +240,8 @@ QML 模式下，访问器会返回安全代理；插件公共方法还会被包�
 2. Qt 主 HTML 当前通过 `file://` 加载，内部资源使用 `emote://`；QML 路径的 URL 组装不同，文档和代码后续应考虑统一。
 3. `docs/系统架构.mmd` 主要描述 Qt 初始化流程，不能单独代表完整 QML 架构。
 4. `walkthrough.md` 是审查记录；本文是稳定的架构基线。代码变动后应优先更新本文，再同步 README。
+
+
+### PSB 核心/插件边界
+
+核心仅接受并验证 pure/raw PSB（`PSB\0`）。包装格式脱壳、PSB 解密及 Win→EMS 适配属于可选插件能力，由 `plugins/psb_decryption/` 注册 middleware 提供。

@@ -56,6 +56,39 @@ class PsbStreamContext:
             self.byte_count += 1
         return bytes(output)
 
+    def _next_word(self) -> None:
+        """Advance the XorShift state when the current word is exhausted."""
+        a = (self.key1 ^ (self.key1 << 11)) & UINT32_MASK
+        b = self.key4
+        c = (a ^ b ^ ((a ^ (b >> 11)) >> 8)) & UINT32_MASK
+        self.key1, self.key2, self.key3, self.key4 = self.key2, self.key3, b, c
+        self.current_key = c
+        self.round += 1
+
+    def fast_forward(self, byte_length: int) -> None:
+        """Match C# ``PsbStreamContext.FastForward`` exactly.
+
+        This is a state-navigation helper, not the same operation as
+        consuming bytes through :meth:`encode`: the C# implementation shifts
+        one bit per skipped byte and therefore intentionally advances by one
+        bit rather than one cipher byte.
+        """
+        if byte_length < 0:
+            raise ValueError("byte_length must be non-negative")
+        for _ in range(byte_length):
+            if self.current_key == 0:
+                self._next_word()
+            self.current_key >>= 1
+            self.byte_count += 1
+
+    def next_round(self) -> int:
+        """Match C# ``PsbStreamContext.NextRound`` and return the new word."""
+        while self.current_key != 0:
+            self.current_key >>= 1
+            self.byte_count += 1
+        self._next_word()
+        return self.current_key
+
 
 @dataclass(frozen=True)
 class DecryptedPsb:
@@ -199,6 +232,6 @@ def decrypt_psb(data: bytes, key: Optional[int] = None, *, recover_key: bool = T
     # C# rewrites the marker to zero and recalculates checksum on decryption.
     canonical[6:8] = b"\0\0"
     if version >= 3:
-        struct.pack_into("<I", canonical, 40, _header_checksum(canonical, version))
+        struct.pack_into("<I", canonical, 40, _header_checksum(bytes(canonical), version))
     _validate_decrypted_header(bytes(canonical), version)
     return DecryptedPsb(bytes(canonical), key, key_source, header_was_encrypted, body_was_encrypted)

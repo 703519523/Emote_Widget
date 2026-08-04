@@ -14,7 +14,7 @@
 
 *   **多框架支持**: 开箱即支持 `QtWidgets` 和 `QtQuick (QML)`，一套逻辑，多端运行。
 *   **Controller-Adapter 架构**: 核心逻辑封装在纯 Python 控制器中，UI 层通过适配器接口交互，结构清晰，极易扩展。
-*   **智能 PSB 处理**: 自动处理多种 PSB 格式（LZ4/MDF/PSZ 压缩包装、XorShift128 加密、Win→EMS 平台转换），用户无需预处理。
+*   **纯核心输入契约**: 无插件时裸 Widget 只接受 raw/pure `PSB\0`；LZ4/MDF/PSZ 脱壳、XorShift128 解密和 Win→EMS 适配等能力由插件扩展。
 *   **安全沙箱**: 引入自定义 `emote://` 协议加载本地资源，无需关闭浏览器的安全策略 (CORS)，解决了跨域和资源加载的痛点。
 *   **异步通信机制**: 采用基于 Promise 的 JS-Python 握手流程，杜绝通信时序导致的 Race Condition，加载更稳健。
 *   **高级 Python SDK**: 提供简单易用的 Python 方法（如 `play()`, `set_scale()`）控制角色，无需编写任何 JavaScript。
@@ -86,7 +86,7 @@ app = QApplication(sys.argv)
 widget = EmoteWidget()
 widget.show()
 
-# 2. 加载模型（自动处理压缩/加密/平台转换）
+# 2. 加载 pure PSB（包装/解密/平台适配由可选插件提供）
 widget.load_model("chara.psb")
 
 # 3. 监听信号

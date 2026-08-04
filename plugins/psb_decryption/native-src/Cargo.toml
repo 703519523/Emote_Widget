@@ -1,0 +1,8 @@
+[workspace]
+members = ["freemote-native"]
+resolver = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

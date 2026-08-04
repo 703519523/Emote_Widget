@@ -6,7 +6,28 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from PySide6.QtCore import QUrl
 from .logger import file_logger as logger
-from .model_normalizer import normalize_model_path
+from .model_normalizer import normalize_model_path, get_model_health_report
+from .model_health import ModelHealthReport
+
+
+class ResourceNormalizationError(ValueError):
+    """A resource exists, but its model data cannot be prepared for loading."""
+
+
+_LAST_MODEL_HEALTH_REPORT: ModelHealthReport | None = None
+_MODEL_HEALTH_BY_REQUEST: Dict[Tuple[str | None, str], ModelHealthReport | None] = {}
+
+
+def consume_last_model_health_report() -> ModelHealthReport | None:
+    global _LAST_MODEL_HEALTH_REPORT
+    report = _LAST_MODEL_HEALTH_REPORT
+    _LAST_MODEL_HEALTH_REPORT = None
+    return report
+
+
+def _set_last_model_health_report(report: ModelHealthReport | None) -> None:
+    global _LAST_MODEL_HEALTH_REPORT
+    _LAST_MODEL_HEALTH_REPORT = report
 
 # 动态计算包内 web_frontend 的绝对路径
 # 结构: emote_widget/utils/paths.py -> (up) -> emote_widget/ -> (down) -> web_frontend
@@ -148,7 +169,7 @@ def add_resource_directory(category: str, path: str) -> None:
         if abs_path not in RESOURCE_SEARCH_PATHS[category]:
             RESOURCE_SEARCH_PATHS[category].insert(0, abs_path) # Insert at beginning to prioritize user paths
             register_allowed_path(abs_path) # 同时注册到安全白名单
-            resolve_resource_url.cache_clear()
+            clear_resource_url_cache()
             _scan_cache.clear() # Clear scan cache when new directory is added
             logger.info(f"添加资源搜索路径 [{category}]: {abs_path}")
     else:
@@ -162,7 +183,7 @@ def getresource_search_paths(category: str) -> List[str]:
     return list(RESOURCE_SEARCH_PATHS.get(category, []))
 
 @lru_cache(maxsize=128)
-def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> str | None:
+def _resolve_resource_url_cached(path_or_name: str | None, internal_subfolder: str) -> str | None:
     """
     将路径转换为 emote:// 协议的 URL。
     支持绝对路径和相对路径自动补全。
@@ -171,6 +192,8 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
         return None
 
     final_path = None
+    if internal_subfolder == "models":
+        _set_last_model_health_report(None)
 
     # 1. 检查是否为绝对路径
     if os.path.exists(path_or_name):
@@ -216,12 +239,20 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
         if internal_subfolder == "models" and os.path.splitext(final_path)[1].lower() == ".psb":
             try:
                 normalized_path = normalize_model_path(final_path)
+                report = (
+                    get_model_health_report(normalized_path)
+                    or get_model_health_report(final_path)
+                )
+                _set_last_model_health_report(report)
+                _MODEL_HEALTH_BY_REQUEST[(path_or_name, internal_subfolder)] = report
                 if normalized_path != Path(final_path).resolve():
                     register_allowed_path(os.path.dirname(str(normalized_path)))
                     final_path = str(normalized_path)
             except Exception as exc:
                 logger.error(f"PSB 模型规范化失败，拒绝加载 '{final_path}': {exc}")
-                return None
+                raise ResourceNormalizationError(
+                    f"model normalization failed for '{final_path}': {exc}"
+                ) from exc
 
         # [Security] 二次校验：确保解析出的绝对路径在白名单内
         if not is_path_allowed(final_path):
@@ -243,3 +274,20 @@ def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> s
 
     logger.warning(f"资源未找到: {path_or_name}")
     return None
+
+
+def resolve_resource_url(path_or_name: str | None, internal_subfolder: str) -> str | None:
+    """解析资源 URL，并在缓存命中时恢复模型健康报告。"""
+    result = _resolve_resource_url_cached(path_or_name, internal_subfolder)
+    if internal_subfolder == "models":
+        _set_last_model_health_report(
+            _MODEL_HEALTH_BY_REQUEST.get((path_or_name, internal_subfolder))
+        )
+    return result
+
+
+def clear_resource_url_cache() -> None:
+    """清理资源 URL 缓存及其关联的请求级健康报告。"""
+    _resolve_resource_url_cached.cache_clear()
+    _MODEL_HEALTH_BY_REQUEST.clear()
+    _set_last_model_health_report(None)

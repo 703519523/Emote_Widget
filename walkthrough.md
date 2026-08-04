@@ -166,8 +166,8 @@ sequenceDiagram
   - 基于情感阈值的动作决策 (点头/摇头/开心/惊讶/害羞/生气...)
   - 点击/悬停事件产生情感冲量
 
-#### debug (调试插件)
-- [main.py](file:///c:/Users/ti/Desktop/Python/Emotewidget_Final/plugins/debug/main.py) (180+ 行): 运行时调试面板
+#### example（插件系统示例）
+- [main.py](file:///c:/Users/ti/Desktop/Python/Emotewidget_Final/plugins/example/main.py)：示范生命周期、Controller 信号、EventBus、Middleware 与 Qt UI，并明确说明不建议使用猴子补丁
 
 ### 6. 测试平台 (`testers/test_qt.py` / `testers/test_qml.py`)
 

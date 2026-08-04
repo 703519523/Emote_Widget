@@ -16,7 +16,8 @@ from PySide6.QtGui import QStandardItemModel, QStandardItem, QTextCursor, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QPushButton, QSlider, QLabel, QComboBox, 
                                QCheckBox, QGroupBox, QLineEdit, QTextEdit, QScrollArea, 
-                               QTabWidget, QDoubleSpinBox, QFileDialog, QListWidget, QSpinBox)
+                               QTabWidget, QDoubleSpinBox, QFileDialog, QListWidget,
+                               QListWidgetItem, QSpinBox)
 from emote_widget import EmoteWidget as EmoteWidget
 import emote_widget.utils.logger as logger_module
 
@@ -494,6 +495,7 @@ class TestMainWindow(QMainWindow):
         # 使用新资源机制注册根目录下的资源文件夹
         cwd = os.getcwd()
         self.emote_view.controller.add_resource_path('models', os.path.join(cwd, 'models'))
+        self.emote_view.controller.add_resource_path('models', os.path.join(cwd, 'test_models'))
         self.emote_view.controller.add_resource_path('models', os.path.join(cwd, 'modellist'))
         self.emote_view.controller.add_resource_path('backgrounds', os.path.join(cwd, 'backgrounds'))
         
@@ -851,9 +853,23 @@ class TestMainWindow(QMainWindow):
         group = QGroupBox("插件管理与交互")
         main_layout = QVBoxLayout(group)
         
-        info_label = QLabel("已加载的插件及其UI将显示在此处。\nUI由插件自身提供。")
+        info_label = QLabel(
+            "勾选状态会立即持久化；点击“应用并重载”后清理当前插件并按新状态重新加载。"
+        )
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #888;")
+
+        state_group = QGroupBox("插件模块启用状态")
+        state_layout = QVBoxLayout(state_group)
+        self.plugin_state_list = QListWidget()
+        self.plugin_state_list.itemChanged.connect(self._on_plugin_state_changed)
+        self.reload_plugins_btn = QPushButton("应用并重载插件")
+        self.reload_plugins_btn.clicked.connect(self._reload_plugins)
+        self.plugin_reload_status = QLabel("状态修改默认在下次启动生效。")
+        self.plugin_reload_status.setWordWrap(True)
+        state_layout.addWidget(self.plugin_state_list)
+        state_layout.addWidget(self.reload_plugins_btn)
+        state_layout.addWidget(self.plugin_reload_status)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -865,9 +881,41 @@ class TestMainWindow(QMainWindow):
         scroll_area.setWidget(self.plugins_container)
         
         main_layout.addWidget(info_label)
+        main_layout.addWidget(state_group)
+        main_layout.addWidget(QLabel("已加载插件 UI："))
         main_layout.addWidget(scroll_area)
+
+        self._refresh_plugin_state_list()
         
         return group
+
+    def _refresh_plugin_state_list(self):
+        """刷新插件模块清单，同时保留禁用插件以便重新启用。"""
+        self.plugin_state_list.blockSignals(True)
+        self.plugin_state_list.clear()
+        for plugin_info in self.emote_view.controller.list_plugin_modules():
+            module_name = plugin_info["module"]
+            item = QListWidgetItem(module_name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if plugin_info["enabled"] else Qt.Unchecked)
+            self.plugin_state_list.addItem(item)
+        self.plugin_state_list.blockSignals(False)
+
+    @Slot(QListWidgetItem)
+    def _on_plugin_state_changed(self, item):
+        enabled = item.checkState() == Qt.Checked
+        self.emote_view.controller.set_plugin_enabled(item.text(), enabled)
+        self.plugin_reload_status.setText(
+            f"{item.text()} 已设为{'启用' if enabled else '禁用'}，等待应用重载。"
+        )
+
+    @Slot()
+    def _reload_plugins(self):
+        self.reload_plugins_btn.setEnabled(False)
+        self.plugin_reload_status.setText("正在重载插件...")
+        if not self.emote_view.controller.reload_plugins():
+            self.reload_plugins_btn.setEnabled(True)
+            self.plugin_reload_status.setText("插件加载仍在进行，请稍后重试。")
     
     def _create_console_tab(self):
         """创建嵌入式调试控制台。"""
@@ -909,6 +957,9 @@ class TestMainWindow(QMainWindow):
     @Slot()
     def _populate_plugins_tab(self):
         """当插件加载完成后，遍历插件并将其UI添加到插件面板。"""
+        self._refresh_plugin_state_list()
+        self.reload_plugins_btn.setEnabled(True)
+        self.plugin_reload_status.setText("插件重载完成。")
         while self.plugins_layout.count():
             child = self.plugins_layout.takeAt(0)
             if child.widget():
@@ -969,10 +1020,10 @@ class TestMainWindow(QMainWindow):
         """当所有插件都加载完成后，这个槽会被调用。"""
         print("\n主窗口: 收到插件加载完成信号！")
         try:
-            plugin=self.emote_view.api.plugins.get("debug")
+            plugin=self.emote_view.api.plugins.get("example")
             plugin.print_widget_size()
         except AttributeError:
-            print("主窗口: 未找到 'debug' 插件。")
+            print("主窗口: 未找到 'example' 插件。")
 
     @Slot(list)
     def _on_player_ready(self, timelines):

@@ -753,7 +753,7 @@ controller.plugins.get("behavior_engine")
 controller.plugins.behavior_engine  # 属性访问
 
 # QML 安全代理（自动包装为 Slot）
-qml_proxy = controller.plugins._qml_proxies["debug"]
+qml_proxy = controller.plugins._qml_proxies["example"]
 ```
 
 ### 7.3 内置插件示例
@@ -784,16 +784,18 @@ def _behavior_loop(self):
         self.controller.set_variable("head_y", head_y_noise)
 ```
 
-#### debug 插件
+#### example 插件
 
-**功能**：提供调试工具和日志输出。
+**功能**：完整示范插件生命周期与公开扩展点。
 
-**实现位置**：`plugins/debug/main.py`
+**实现位置**：`plugins/example/main.py`
 
 **主要功能**：
-- 监听所有 Controller 信号
-- 输出详细日志
-- 提供调试命令接口
+- 连接并在清理时断开 Controller 信号
+- 订阅 EventBus 通知
+- 注册并移除 Middleware
+- 提供最小 Qt UI 和安全宿主交互示例
+- 明确说明猴子补丁不建议用于正式插件
 
 ---
 
@@ -882,5 +884,3 @@ EmoteWidget SDK 通过精心设计的架构实现了以下核心能力：
 **文档版本**: v1.0  
 **最后更新**: 2026-07-22  
 **维护者**: EmoteWidget 开发团队
-
-
